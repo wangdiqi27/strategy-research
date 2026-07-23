@@ -1,0 +1,17 @@
+[project]
+name = "strategy-research"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas>=3.0.3",
+    "plotly>=6.9.0",
+    "vnpy",
+    "vnpy-data-ext",
+    "xlsxwriter>=3.2.9",
+]
+
+[tool.uv.sources]
+vnpy = { git = "ssh://git@github.com/cybrook/vnpy.git", rev = "4.4.0.2" }
+vnpy-data-ext = { git = "ssh://git@github.com/cybrook/vnpy_data_ext.git", rev = "1.7.2" }
