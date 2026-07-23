@@ -7,15 +7,15 @@ from pandas import DataFrame
 from plotly import graph_objects as go
 from plotly.subplots import make_subplots
 
-from config.backtesting import G_BACKTEST_PRODUCT_LIST
-from config.exchange import get_contract_config
-from factor.momentum import calc_trix
-from factor.volatility import calc_atr
-from factor.volume_price import calc_vpt
-from backtesting.object import BacktestingDirection, BacktestingProductOverallStatistics
-from backtesting.pandas_backtesting_base import PandasBacktestingBase
-from tool.contract import ContractTool
-from tool.data import KLineTool, BarDataManager
+from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
+from strategy_research.config.exchange import get_contract_config
+from strategy_research.factor.momentum import calc_trix
+from strategy_research.factor.volatility import calc_atr
+from strategy_research.factor.volume_price import calc_vpt
+from strategy_research.backtesting.object import BacktestingDirection, BacktestingProductOverallStatistics
+from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
+from strategy_research.tool.contract import ContractTool
+from strategy_research.tool.data import KLineTool, BarDataManager
 
 
 class TrixVptResearch(PandasBacktestingBase):
@@ -427,7 +427,7 @@ class TrixVptResearch(PandasBacktestingBase):
 
 def main():
     pd.set_option('display.max_columns', None)
-    report_root_dir = "./factor-report"
+    report_root_dir = "factor-report"
     factor_name = "TRIX-VPT"
     bar_period = "1m"
     initial_capital = 100_0000
@@ -519,7 +519,7 @@ def test():
 
 def test2():
     pd.set_option('display.max_columns', None)
-    report_root_dir = "./factor-report"
+    report_root_dir = "factor-report"
     factor_name = "TRIX-VPT"
     bar_period = "1m"
     symbol = "FG505"

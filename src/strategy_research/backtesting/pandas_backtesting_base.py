@@ -8,9 +8,9 @@ from pandas import DataFrame, Series
 from plotly.io import to_html
 from plotly.subplots import make_subplots
 
-from backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, BacktestingPosition
-from config.exchange import get_contract_config
-from tool.contract import ContractTool
+from strategy_research.backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, BacktestingPosition
+from strategy_research.config.exchange import get_contract_config
+from strategy_research.tool.contract import ContractTool
 
 
 class PandasBacktestingBase(ABC):

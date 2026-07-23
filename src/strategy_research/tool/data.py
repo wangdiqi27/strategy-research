@@ -13,7 +13,7 @@ from vnpy.trader.database import get_database
 from vnpy.trader.object import BarData
 from vnpy_data_ext.database import PostgresqlDatabase
 
-from tool.contract import ContractTool
+from strategy_research.tool.contract import ContractTool
 
 
 class BarDataManager:
@@ -24,19 +24,19 @@ class BarDataManager:
 
     @classmethod
     def _get_data_cache_1m_df_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m_df"
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-df"
 
     @classmethod
     def _get_data_cache_1d_df_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d_df"
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-df"
 
     @classmethod
     def _get_data_cache_1m_bar_list_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m_bar_list"
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-bar-list"
 
     @classmethod
     def _get_data_cache_1d_bar_list_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d_bar_list"
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-bar-list"
 
     @staticmethod
     def _load_bar_data_as_df_from_database(symbol: str,

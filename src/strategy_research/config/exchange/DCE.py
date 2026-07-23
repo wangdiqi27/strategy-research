@@ -1,8 +1,8 @@
 from vnpy.trader.constant import Exchange
 from vnpy_data_ext.constant import CommissionType
 
-from config.exchange.object import ContractConfig, ContractCommission
-from config.exchange.trading_session import DCE_CZCE_NORMAL_DAY_NIGHT_SESSION, DCE_CZCE_NORMAL_DAY_SESSION
+from strategy_research.config.exchange.object import ContractConfig, ContractCommission
+from strategy_research.config.exchange.trading_session import DCE_CZCE_NORMAL_DAY_NIGHT_SESSION, DCE_CZCE_NORMAL_DAY_SESSION
 
 DCE_EXCHANGE_CONFIG: dict[str, ContractConfig] = {
     "a": ContractConfig(

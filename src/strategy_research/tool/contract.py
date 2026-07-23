@@ -4,7 +4,7 @@ import pandas as pd
 from pandas import DataFrame
 from vnpy.trader.constant import Exchange
 
-from config.exchange import get_contract_config
+from strategy_research.config.exchange import get_contract_config
 
 class ContractTool:
 
