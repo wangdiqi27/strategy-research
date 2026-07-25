@@ -106,8 +106,13 @@ class BarDataManager:
 
         cache_dir.mkdir(parents=True, exist_ok=True)
         for product in product_list:
+            jq_symbol = f"{product}JQ00"
+            symbol_list = [jq_symbol]
             for suffix in suffixes:
                 symbol = ContractTool.generate_symbol_by_product_and_suffix(product, suffix)
+                symbol_list.append(symbol)
+
+            for symbol in symbol_list:
                 cache_file = cache_dir / f"{symbol}.csv"
                 bar_df = cls._load_bar_data_as_df_from_database(symbol,
                                                                 interval,

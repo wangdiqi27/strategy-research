@@ -7,17 +7,27 @@ from vnpy.trader.constant import Exchange
 from strategy_research.config.exchange import get_contract_config
 
 class ContractTool:
-
     @staticmethod
     def get_exchange_by_product(product: str) -> Exchange:
         contract_config = get_contract_config(product)
         return contract_config.exchange
 
-    @staticmethod
-    def get_product_by_symbol(symbol: str) -> str:
-        product = re.match(r'[a-zA-Z]+', symbol).group()
+    @classmethod
+    def get_product_by_symbol(cls,
+                              symbol: str) -> str:
+        contract = symbol.split('.')[0]
 
-        return product
+        # 规则1：加权指数 — 品种 + JQ00
+        m = re.match(r'^([a-zA-Z]+)JQ00$', contract)
+        if m:
+            return m.group(1)
+
+        # 规则2：普通合约 — 品种 + 数字
+        m = re.match(r'^([a-zA-Z]+)\d+$', contract)
+        if m:
+            return m.group(1)
+
+        return contract
 
     @classmethod
     def get_exchange_by_symbol(cls, symbol: str) -> Exchange:

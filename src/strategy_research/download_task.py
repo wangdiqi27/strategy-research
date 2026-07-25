@@ -16,12 +16,12 @@ product_list = []
 for product in contract_config_map_product.keys():
     product_list.append(product)
 
-BarDataManager.download_bar_df_to_cache(product_list,
-                                        start_year,
-                                        end_year,
-                                        Interval.DAILY)
-
 # BarDataManager.download_bar_df_to_cache(product_list,
 #                                         start_year,
 #                                         end_year,
-#                                         Interval.MINUTE)
+#                                         Interval.DAILY)
+
+BarDataManager.download_bar_df_to_cache(product_list,
+                                        start_year,
+                                        end_year,
+                                        Interval.MINUTE)
