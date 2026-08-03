@@ -34,7 +34,7 @@ class BacktestingDailyEquityRecorder:
             daily_equity: BacktestingDailyEquity):
         self.daily_equity_list.append(daily_equity)
 
-    def get_statistics(self) -> DataFrame:
+    def get_all_daily_equity_as_df(self) -> DataFrame:
         if not self.daily_equity_list:
             return pd.DataFrame()
 
@@ -460,8 +460,8 @@ class BacktestingAccount:
             commission_cost=self.commission_cost
         ))
 
-    def get_daily_equity_statistics(self) -> DataFrame:
-        return self.daily_equity_recorder.get_statistics()
+    def get_all_daily_equity_as_df(self) -> DataFrame:
+        return self.daily_equity_recorder.get_all_daily_equity_as_df()
 
 
 class BacktestingProductOverallStatistics:
@@ -473,12 +473,18 @@ class BacktestingProductOverallStatistics:
         self.report_path = report_path
 
         self._trade_statistics: dict[str, list[BacktestingTradeStatistics]] = defaultdict(list)
+        self._equity_statistics: dict[str, list[DataFrame]] = defaultdict(list)
         self._bar_df_statistics: dict[str, list[DataFrame]] = defaultdict(list)
 
     def add_trade_statistics(self,
                              product: str,
                              trade_statistics: BacktestingTradeStatistics):
         self._trade_statistics[product].append(trade_statistics)
+
+    def add_daily_equity_df(self,
+                            product: str,
+                            daily_equity_df: DataFrame):
+        self._equity_statistics[product].append(daily_equity_df)
 
     def add_bar_df(self,
                    product: str,

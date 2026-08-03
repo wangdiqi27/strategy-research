@@ -1,6 +1,16 @@
-from strategy_research.tool.data import BarDataManager
+import numpy as np
+import pandas as pd
 
-df = BarDataManager.load_bar_df_from_cache("FGJQ00", "1d")
+df = pd.DataFrame(
+    [{"can" : True},
+     {"can" : False},
+{"can" : np.nan},
+     ]
+)
 
-df["close_pct"] = df["close"].pct_change()
-print(df["close_pct"].rolling(60).rank())
+arr = df.values
+
+print(df)
+
+if arr[1]:
+    print("True")

@@ -102,3 +102,28 @@ def calc_trix(df: DataFrame,
         }, inplace=True)
 
     return df_copy
+
+
+def calc_macd(df: DataFrame,
+              fast_period: int = 12,
+              slow_period: int = 26,
+              signal_period: int = 9) -> DataFrame:
+    ema_fast = df['close'].ewm(span=fast_period, adjust=False).mean()
+    ema_slow = df['close'].ewm(span=slow_period, adjust=False).mean()
+
+    # 2. 计算 DIF (快线)
+    dif = ema_fast - ema_slow
+
+    # 3. 计算 DEA (慢线/信号线)
+    dea = dif.ewm(span=signal_period, adjust=False).mean()
+
+    # 4. 计算 MACD 柱
+    # 通达信等软件标准是 (DIF - DEA) * 2，为了直观显示红绿柱
+    macd_hist = (dif - dea) * 2
+
+    # 将结果写入 DataFrame
+    df['macd_diff'] = dif
+    df['macd_dea'] = dea
+    df['macd_hist'] = macd_hist
+
+    return df

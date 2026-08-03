@@ -31,6 +31,11 @@ class PandasBacktestingBase(ABC):
         self.datetime_formater = '%Y%m%d %H:%M'
         self.enable_fig_daily_mode = enable_fig_daily_mode
 
+        self.bar_start_datetime: datetime | None = None
+        self.bar_end_datetime: datetime | None = None
+        self.trading_start_datetime: datetime | None = None
+        self.trading_end_datetime: datetime | None = None
+
         self.product = ContractTool.get_product_by_symbol(self.symbol)
         self.contract_config = get_contract_config(self.product)
         self.price_tick = self.contract_config.price_tick
@@ -56,6 +61,13 @@ class PandasBacktestingBase(ABC):
     def run(self, bar_df: DataFrame):
         print(f"{'-' * 10} start computing indicators {'-' * 10}")
         exec_bar_df, signal_bar_df = self.compute_indicators(bar_df, self.contract_config.trading_session_time)
+        self.trading_start_datetime = exec_bar_df['trading_date'].iloc[0]
+        self.trading_end_datetime = exec_bar_df['trading_date'].iloc[-1]
+        self.bar_start_datetime = signal_bar_df["trading_date"].iloc[0]
+        self.bar_end_datetime = signal_bar_df["trading_date"].iloc[-1]
+
+        print(f"{self.trading_start_datetime} - {self.trading_end_datetime}")
+        print(f"{self.bar_start_datetime} - {self.bar_end_datetime}")
         print(f"{'-' * 10} complete computing indicators {'-' * 10}")
         self._exec_bar_df = exec_bar_df
         self._signal_bar_df = signal_bar_df
@@ -86,6 +98,12 @@ class PandasBacktestingBase(ABC):
 
     def show_trade_statistics(self):
         self.account.trade_recorder.show_statistics()
+
+    def get_daily_equity_statistics(self, ) -> DataFrame:
+        daily_equity_df = self.account.daily_equity_recorder.get_all_daily_equity_as_df()
+
+        return daily_equity_df
+
 
     @abstractmethod
     def create_kline_fig(self) -> go.Figure:
@@ -412,13 +430,14 @@ class PandasBacktestingBase(ABC):
             ),
             hovermode='x unified',
             # height=800,
-            template='plotly_white'
+            # template='plotly_white',
+            template="plotly_dark",
         )
 
         return fig
 
     def _plot_equity(self) -> go.Figure | None:
-        daily_equity_df = self.account.daily_equity_recorder.get_statistics()
+        daily_equity_df = self.get_daily_equity_statistics()
         if daily_equity_df.empty:
             return None
 
