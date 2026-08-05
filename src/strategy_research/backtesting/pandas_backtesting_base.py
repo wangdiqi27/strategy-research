@@ -8,7 +8,8 @@ from pandas import DataFrame, Series
 from plotly.io import to_html
 from plotly.subplots import make_subplots
 
-from strategy_research.backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, BacktestingPosition
+from strategy_research.backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, \
+    BacktestingPosition, BacktestingSummary
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.tool.contract import ContractTool
 
@@ -66,8 +67,6 @@ class PandasBacktestingBase(ABC):
         self.bar_start_datetime = signal_bar_df["trading_date"].iloc[0]
         self.bar_end_datetime = signal_bar_df["trading_date"].iloc[-1]
 
-        print(f"{self.trading_start_datetime} - {self.trading_end_datetime}")
-        print(f"{self.bar_start_datetime} - {self.bar_end_datetime}")
         print(f"{'-' * 10} complete computing indicators {'-' * 10}")
         self._exec_bar_df = exec_bar_df
         self._signal_bar_df = signal_bar_df
@@ -96,14 +95,35 @@ class PandasBacktestingBase(ABC):
     def get_trade_statistics(self, ) -> BacktestingTradeStatistics:
         return self.account.trade_recorder.get_statistics()
 
-    def show_trade_statistics(self):
-        self.account.trade_recorder.show_statistics()
+    def get_trades_df(self) -> DataFrame:
+        trade_df = self.account.trade_recorder.get_trades_df()
 
-    def get_daily_equity_statistics(self, ) -> DataFrame:
+        return trade_df
+
+    def get_all_daily_equity_as_df(self, ) -> DataFrame:
         daily_equity_df = self.account.daily_equity_recorder.get_all_daily_equity_as_df()
 
         return daily_equity_df
 
+    def get_backtesting_summary(self) -> BacktestingSummary:
+        backtesting_trade_stat = self.get_trade_statistics()
+        daily_equity_statistics_df = self.get_all_daily_equity_as_df()
+        max_drawdown = daily_equity_statistics_df["drawdown"].min()
+
+        backtesting_summary = BacktestingSummary(symbol=self.symbol,
+                                                 trade_stats=backtesting_trade_stat,
+                                                 max_drawdown=max_drawdown,
+                                                 bar_start_date=self.bar_start_datetime,
+                                                 bar_end_date=self.bar_end_datetime,
+                                                 trading_start_date=self.trading_start_datetime,
+                                                 trading_end_date=self.trading_end_datetime, )
+
+        return backtesting_summary
+
+    def show_backtesting_summary(self):
+        backtesting_summary = self.get_backtesting_summary()
+
+        print(backtesting_summary)
 
     @abstractmethod
     def create_kline_fig(self) -> go.Figure:
@@ -437,7 +457,7 @@ class PandasBacktestingBase(ABC):
         return fig
 
     def _plot_equity(self) -> go.Figure | None:
-        daily_equity_df = self.get_daily_equity_statistics()
+        daily_equity_df = self.get_all_daily_equity_as_df()
         if daily_equity_df.empty:
             return None
 
@@ -555,7 +575,7 @@ class PandasBacktestingBase(ABC):
             else:
                 y_max = max_value * 0.95
 
-        if abs(y_max- y_min) < 1e-6:
+        if abs(y_max - y_min) < 1e-6:
             y_min -= 1.0
             y_max += 1.0
 
@@ -565,6 +585,7 @@ class PandasBacktestingBase(ABC):
                       symbol: str,
                       price: float,
                       direction: BacktestingDirection,
+                      open_reason: str,
                       open_time: datetime,
                       open_trading_date: date,
                       stop_loss: float = 0,
@@ -576,6 +597,7 @@ class PandasBacktestingBase(ABC):
             self.multiplier,
             direction,
             price,
+            open_reason,
             open_time,
             open_trading_date,
             stop_loss,

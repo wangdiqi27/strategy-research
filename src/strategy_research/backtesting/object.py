@@ -1,11 +1,13 @@
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, date
 from enum import Enum
+from pathlib import Path
 
 import pandas as pd
 import xlsxwriter
 from pandas import DataFrame
+
 
 class BacktestingDirection(Enum):
     LONG = "LONG"
@@ -64,6 +66,13 @@ class BacktestingTradeStatistics:
     max_consecutive_loss_count: int = 0
     max_consecutive_loss: float = 0
 
+    long_count: int = 0
+    short_count: int = 0
+    long_win_rate: float = 0.0
+    short_win_rate: float = 0.0
+    long_profit_loss_ratio: float = 0.0
+    short_profit_loss_ratio: float = 0.0
+
     total_net_profit_pct: float = field(init=False)
     max_consecutive_loss_pct: float = field(init=False)
 
@@ -82,9 +91,6 @@ class BacktestingTradeStatistics:
         fmt_p = lambda x: f"{x:.2f}%" if x is not None else "0.00%"
 
         report = [
-            "=" * 60,
-            f"             回测交易统计报告 [ 标的: {self.symbol or '未指定'} ]",
-            "=" * 60,
             "【账户资金概况】",
             f"  初始资金 (Initial Capital) :  {fmt_m(self.initial_capital)} 元",
             f"  累计净利润 (Net Profit)    :  {fmt_m(self.total_net_profit)} 元 ({fmt_p(self.total_net_profit_pct * 100)})",
@@ -99,7 +105,18 @@ class BacktestingTradeStatistics:
             f"  盈亏比 (P&L Ratio)         :  {self.profit_loss_ratio:.2f}",
             f"  单次均盈 (Avg Profit)      :  {fmt_m(self.avg_profit)} 元",
             f"  单次均亏 (Avg Loss)        :  {fmt_m(self.avg_loss)} 元",
-            "=" * 60
+            f"  连续亏损次数 (MCL Count)     :  {self.max_consecutive_loss_count}",
+            # f"  连续亏损金额 (MCL Loss)     :  {self.max_consecutive_loss} 元 ({fmt_p(self.max_consecutive_loss_pct * 100)})",
+            "",
+            "【多空盈亏与风险指标】",
+            f"  做多总交易次数 (Total Long Trades)   :  {self.long_count}",
+            f"  做多交易胜率 (Win Rate)             :  {fmt_p(self.long_win_rate * 100)}",
+            f"  做多盈亏比 (P&L Ratio)              :  {self.long_profit_loss_ratio:.2f}",
+            "",
+            f"  做空总交易次数 (Total Long Trades)         :  {self.short_count}",
+            f"  做空交易胜率 (Win Rate)                    :  {fmt_p(self.short_win_rate * 100)}",
+            f"  做空盈亏比 (P&L Ratio)                     :  {self.short_profit_loss_ratio:.2f}",
+            "",
         ]
         return "\n".join(report)
 
@@ -113,8 +130,10 @@ class BacktestingTrade:
     close_time: datetime
     close_trading_date: date
     open_price: float
+    open_reason: str
     close_price: float
     close_reason: str
+    volume: float
     net_profit: float
     gross_profit: float
     take_profit: float = 0
@@ -124,7 +143,7 @@ class BacktestingTrade:
 class BacktestingTradeRecorder:
     def __init__(self,
                  initial_capital: float,
-                 symbol: str,):
+                 symbol: str, ):
         self.initial_capital: float = initial_capital
         self.trades: list[BacktestingTrade] = []
         self.symbol: str = symbol
@@ -173,6 +192,34 @@ class BacktestingTradeRecorder:
             max_consecutive_loss_count = max(max_consecutive_loss_count, cur_consecutive_loss_count)
             max_consecutive_loss = max(max_consecutive_loss, cur_consecutive_loss)
 
+        # 单独统计做多和做空情况
+
+        ## 做多统计
+        long_trades = [t for t in trades if t.direction == BacktestingDirection.LONG]
+        long_count = len(long_trades)
+        long_wins = [t for t in long_trades if t.net_profit > 0]
+        long_losses = [t for t in long_trades if t.net_profit < 0]
+        long_win_num = len(long_wins)
+        long_loss_num = len(long_losses)
+        long_win_rate = long_win_num / long_count if long_count > 0 else 0
+
+        avg_long_win = sum(t.net_profit for t in long_wins) / long_win_num if long_win_num > 0 else 0
+        avg_long_loss = abs(sum(t.net_profit for t in long_losses) / long_loss_num) if long_loss_num > 0 else 0
+        long_profit_loss_ratio = avg_long_win / avg_long_loss if avg_long_loss > 0 else float('inf')
+
+        ## 做空统计
+        short_trades = [t for t in trades if t.direction == BacktestingDirection.SHORT]
+        short_count = len(short_trades)
+        short_wins = [t for t in short_trades if t.net_profit > 0]
+        short_losses = [t for t in short_trades if t.net_profit < 0]
+        short_win_num = len(short_wins)
+        short_loss_num = len(short_losses)
+        short_win_rate = short_win_num / short_count if short_count > 0 else 0
+
+        avg_short_win = sum(t.net_profit for t in short_wins) / short_win_num if short_win_num > 0 else 0
+        avg_short_loss = abs(sum(t.net_profit for t in short_losses) / short_loss_num) if short_loss_num > 0 else 0
+        short_profit_loss_ratio = avg_short_win / avg_short_loss if avg_short_loss > 0 else float('inf')
+
         return BacktestingTradeStatistics(
             symbol=trades[0].symbol,
             initial_capital=self.initial_capital,
@@ -186,6 +233,12 @@ class BacktestingTradeRecorder:
             avg_loss=avg_loss,
             max_consecutive_loss_count=max_consecutive_loss_count,
             max_consecutive_loss=max_consecutive_loss,
+            long_count=long_count,
+            short_count=short_count,
+            long_win_rate=long_win_rate,
+            short_win_rate=short_win_rate,
+            long_profit_loss_ratio=long_profit_loss_ratio,
+            short_profit_loss_ratio=short_profit_loss_ratio,
         )
 
     def show_statistics(self):
@@ -201,6 +254,7 @@ class BacktestingPosition:
                  price_tick: float,
                  volume: float,
                  open_avg_price: float,
+                 open_reason: str,
                  direction: BacktestingDirection,
                  margin_rate: float,
                  commission_rate: float,
@@ -214,6 +268,7 @@ class BacktestingPosition:
         self.price_tick: float = price_tick
         self.volume: float = volume
         self.open_avg_price: float = open_avg_price
+        self.open_reason: str = open_reason
         self.latest_price: float = open_avg_price
         self.direction: BacktestingDirection = direction
         self.margin_rate: float = margin_rate
@@ -319,6 +374,7 @@ class BacktestingAccount:
                       contract_multiplier: float,
                       direction: BacktestingDirection,
                       price: float,
+                      open_reason: str,
                       open_time: datetime,
                       open_trading_date: date,
                       stop_loss: float = 0,
@@ -362,6 +418,7 @@ class BacktestingAccount:
                                                      price_tick,
                                                      volume,
                                                      adjusted_open_price,
+                                                     open_reason,
                                                      direction,
                                                      margin_rate,
                                                      commission_rate,
@@ -423,8 +480,10 @@ class BacktestingAccount:
             close_time=close_time,
             close_trading_date=close_trading_date,
             open_price=position.open_avg_price,
+            open_reason=position.open_reason,
             close_price=adjusted_close_price,
             close_reason=reason,
+            volume=position.volume,
             net_profit=realized_pnl - commission - position.open_commission,
             gross_profit=realized_pnl,
             stop_loss=position.stop_loss,
@@ -464,44 +523,148 @@ class BacktestingAccount:
         return self.daily_equity_recorder.get_all_daily_equity_as_df()
 
 
-class BacktestingProductOverallStatistics:
+@dataclass
+class BacktestingSummary:
+    symbol: str
+    trade_stats: BacktestingTradeStatistics
+    max_drawdown: float = 0.0
+    max_drawdown_duration: int = 0
+    # K 线的开始时间
+    bar_start_date: date | None = None
+    # K 线的结束时间
+    bar_end_date: date | None = None
+    # 计算完指标开始交易的时间
+    trading_start_date: date | None = None
+    # 计算完指标结束交易的时间
+    trading_end_date: date | None = None
+
+    def to_dict(self) -> dict:
+        summary_dict = asdict(self.trade_stats)
+        summary_dict["symbol"] = self.symbol
+        summary_dict["max_drawdown"] = self.max_drawdown
+        summary_dict["bar_start_date"] = self.bar_start_date
+        summary_dict["bar_end_date"] = self.bar_end_date
+        summary_dict["trading_start_date"] = self.trading_start_date
+        summary_dict["trading_end_date"] = self.trading_end_date
+
+        return summary_dict
+
+    def __str__(self) -> str:
+        # 金额格式化（千分位、保留2位小数）
+        fmt_m = lambda x: f"{x:,.2f}" if x is not None else "0.00"
+        # 百分比格式化
+        fmt_p = lambda x: f"{x:.2f}%" if x is not None else "0.00%"
+
+        report = [
+            "=" * 60,
+            f"             回测交易统计报告 [ 标的: {self.symbol or '未指定'} ]",
+            "=" * 60,
+            str(self.trade_stats),
+            "【最大回撤统计】",
+            f"  最大回撤 (Max DrawDown)  :  {fmt_p(self.max_drawdown * 100)}",
+            "",
+            "【交易起止时间】",
+            f"  K线开始时间             :  {self.bar_start_date}",
+            f"  K线结束时间             :  {self.bar_end_date}",
+            f"  交易开始时间(计算完指标)  :  {self.trading_start_date}",
+            f"  交易结束时间(计算完指标)  :  {self.trading_end_date}",
+            "",
+            "=" * 60
+        ]
+        return "\n".join(report)
+
+
+class BacktestingOverallStatistics:
 
     def __init__(self,
                  factor_name: str,
-                 report_path: str):
+                 report_path: Path,
+                 strategy_file_name: str,
+                 version: str):
         self.factor_name = factor_name
         self.report_path = report_path
+        self.strategy_file_name = strategy_file_name
+        self.version = version
 
-        self._trade_statistics: dict[str, list[BacktestingTradeStatistics]] = defaultdict(list)
-        self._equity_statistics: dict[str, list[DataFrame]] = defaultdict(list)
-        self._bar_df_statistics: dict[str, list[DataFrame]] = defaultdict(list)
+        # product -> backtesting summary
+        self._summary_map: dict[str, list[BacktestingSummary]] = defaultdict(list)
+        # product -> backtesting trade
+        self._trade_df_map: dict[str, list[DataFrame]] = defaultdict(list)
 
-    def add_trade_statistics(self,
-                             product: str,
-                             trade_statistics: BacktestingTradeStatistics):
-        self._trade_statistics[product].append(trade_statistics)
+    def add_backtesting_summary(self,
+                                product: str,
+                                backtesting_summary: BacktestingSummary):
+        self._summary_map[product].append(backtesting_summary)
 
-    def add_daily_equity_df(self,
-                            product: str,
-                            daily_equity_df: DataFrame):
-        self._equity_statistics[product].append(daily_equity_df)
+    def add_trade_df(self,
+                     product: str,
+                     df: DataFrame):
+        df = df.copy()
+        self._trade_df_map[product].append(df)
 
-    def add_bar_df(self,
-                   product: str,
-                   df: DataFrame):
-        self._bar_df_statistics[product].append(df)
+    def analyze_trade_to_excel_file(self,
+                                    product: str | None = None):
+        if product is None:
+            filename = f"all-{self.factor_name}-trades"
+            trade_df_list = [item for sublist in self._trade_df_map.values() for item in sublist]
+        else:
+            trade_df_list = self._trade_df_map[product]
+            filename = f"{product}-{self.factor_name}-trades"
 
-    def analyze_product(self,
-                        product: str,
-                        indicator_fields: list[str], ):
-        trade_statistics_list = self._trade_statistics[product]
-        bar_indicator_df_list = self._bar_df_statistics[product]
-        if not trade_statistics_list and not bar_indicator_df_list:
+        writer = pd.ExcelWriter(self.report_path / f'{filename}.xlsx', engine='xlsxwriter')
+        if trade_df_list:
+            for trade_df in trade_df_list:
+                symbol = trade_df["symbol"].iloc[0]
+                columns = [
+                    "symbol",
+                    "direction",
+                    "open_time",
+                    "close_time",
+                    "open_price",
+                    "open_reason",
+                    "close_price",
+                    "close_reason",
+                    "volume",
+                    "net_profit",
+                    "gross_profit",
+                    "take_profit",
+                    "stop_loss",
+                ]
+                filter_trade_df = trade_df[columns]
+                filter_trade_df['open_time'] = filter_trade_df['open_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                filter_trade_df['close_time'] = filter_trade_df['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                filter_trade_df.to_excel(writer,
+                                         sheet_name=symbol,
+                                         engine='xlsxwriter', )
+                worksheet = writer.sheets[symbol]
+                worksheet.autofit()
+
+        writer.close()
+
+    def analyze_summary_to_txt_file(self):
+        summary_list = [item for sublist in self._summary_map.values() for item in sublist]
+        brief_report_file = self.report_path / f"brief-summary-data-{self.version}.txt"
+        with open(brief_report_file, 'w', encoding='utf-8') as f:
+            f.write(f"策略名称: {self.strategy_file_name}\n")
+            content = '\n'.join(str(d) for d in summary_list)
+            f.write(content)
+
+    def analyze_summary_to_excel_file(self,
+                                      product: str | None = None, ):
+        if product is None:
+            filename = f"all-{self.factor_name}-stat"
+            summary_list = [item for sublist in self._summary_map.values() for item in sublist]
+        else:
+            summary_list = self._summary_map[product]
+            filename = f"{product}-{self.factor_name}-stat"
+
+        if not summary_list:
             return
 
-        writer = pd.ExcelWriter(f'{self.report_path}/{product}-{self.factor_name}-stat.xlsx', engine='xlsxwriter')
-        if trade_statistics_list:
-            trade_statistics_df = pd.DataFrame(trade_statistics_list)
+        writer = pd.ExcelWriter(self.report_path / f'{filename}.xlsx', engine='xlsxwriter')
+        if summary_list:
+            records = [item.to_dict() for item in summary_list]
+            summary_df = pd.json_normalize(records)
             columns = [
                 "symbol",
                 "total_trades",
@@ -510,51 +673,33 @@ class BacktestingProductOverallStatistics:
                 "total_net_profit_pct",
                 "total_net_profit",
                 "max_consecutive_loss_count",
-                "max_consecutive_loss",
-                "max_consecutive_loss_pct",
+                # "max_consecutive_loss",
+                # "max_consecutive_loss_pct",
+                "max_drawdown",
+                "bar_start_date",
+                "bar_end_date",
+                "trading_start_date",
+                "trading_end_date",
             ]
             percent_format_columns = [
                 "win_rate",
                 "total_net_profit_pct",
-                "max_consecutive_loss_pct",
-
+                # "max_consecutive_loss_pct",
+                "max_drawdown",
             ]
-            trade_stat_summary_df = trade_statistics_df[columns]
-            trade_stat_summary_df.to_excel(writer,
-                                           sheet_name="trade-statistics",
-                                           engine='xlsxwriter',)
+            filter_summary_df = summary_df[columns]
+            filter_summary_df.to_excel(writer,
+                                       sheet_name="summary",
+                                       engine='xlsxwriter', )
             workbook = writer.book
-            worksheet = writer.sheets['trade-statistics']
+            worksheet = writer.sheets['summary']
             percent_format = workbook.add_format({'num_format': '0.00%'})
             for col in percent_format_columns:
-                col_idx = trade_stat_summary_df.columns.get_loc(col)
+                col_idx = filter_summary_df.columns.get_loc(col)
                 col_idx += 1
                 col_letter = xlsxwriter.utility.xl_col_to_name(col_idx)
                 worksheet.set_column(f'{col_letter}:{col_letter}', 12, percent_format)
 
             worksheet.autofit()
-
-
-        if bar_indicator_df_list:
-            for name in indicator_fields:
-                stat_list = []
-                for bar_indicator_df in bar_indicator_df_list:
-                    stat = bar_indicator_df[name].describe()
-                    stat_list.append({
-                        "symbol": bar_indicator_df["symbol"].iloc[0],
-                        "count": stat["count"],
-                        "mean": stat["mean"],
-                        "std": stat["std"],
-                        "min": stat["min"],
-                        "max": stat["max"],
-                        "25%": stat["25%"],
-                        "50%": stat["50%"],
-                        "75%": stat["75%"],
-                    })
-
-                stat_list_df = pd.DataFrame(stat_list)
-                stat_list_df.to_excel(writer, sheet_name=name, engine='xlsxwriter')
-                worksheet = writer.sheets[name]
-                worksheet.autofit()
 
         writer.close()

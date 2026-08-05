@@ -22,6 +22,8 @@ class BarDataManager:
     _SYMBOL_BAR_1D_DF_CACHE: dict[str, DataFrame] = {}
     _SYMBOL_BAR_1M_DF_CACHE: dict[str, DataFrame] = {}
 
+    _PRODUCT_YEAR_1D_DF_CACHE: dict[str, DataFrame] = {}
+
     @classmethod
     def _get_data_cache_1m_df_dir(cls) -> Path:
         return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-df"
@@ -29,6 +31,10 @@ class BarDataManager:
     @classmethod
     def _get_data_cache_1d_df_dir(cls) -> Path:
         return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-df"
+
+    @classmethod
+    def _get_data_cache_1d_excel_dir(cls) -> Path:
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-excel"
 
     @classmethod
     def _get_data_cache_1m_bar_list_dir(cls) -> Path:
@@ -212,6 +218,56 @@ class BarDataManager:
         symbol_bar_df_cache[symbol] = bar_df
 
         return bar_df
+
+    @classmethod
+    def load_product_by_year_from_excel(cls,
+                                        product: str,
+                                        year: str,
+                                        period: str) -> DataFrame:
+        if period == "1d":
+            bar_df_cache = cls._PRODUCT_YEAR_1D_DF_CACHE
+        else:
+            raise Exception("not support")
+
+        key = f"{product}-{year}"
+        if key in bar_df_cache:
+            return bar_df_cache[key]
+
+        file_path = cls._get_data_cache_1d_excel_dir() / f"{key}.xlsx"
+        df = pd.read_excel(file_path, engine="openpyxl", parse_dates=["交易日期"])
+        df = df.rename(columns={
+            "商品名称": "product",
+            "合约名称": "symbol",
+            "交易日期": "datetime",
+            "开盘价": "open",
+            "最高价": "high",
+            "最低价": "low",
+            "收盘价": "close",
+            "成交量": "volume",
+            "持仓量": "open_interest",
+            "成交额": "turnover",
+        })
+        df["datetime"] = pd.to_datetime(df["datetime"])
+
+        numeric_cols = ['high', 'low', 'open', 'close', 'volume', 'open_interest', 'turnover']
+        for col in numeric_cols:
+            if col in df.columns:
+                # 将列转为字符串，去掉逗号，再转回 float
+                df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+
+        selected_cols = [
+            "symbol",
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "open_interest",
+            "turnover",
+        ]
+
+        return df[selected_cols]
 
 
 class KLineTool:

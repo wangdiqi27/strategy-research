@@ -13,7 +13,7 @@ from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix
 from strategy_research.factor.volatility import calc_atr
 from strategy_research.factor.volume_price import calc_vpt
-from strategy_research.backtesting.object import BacktestingDirection, BacktestingProductOverallStatistics, \
+from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingTradeStatistics
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
 from strategy_research.tool.contract import ContractTool
@@ -444,7 +444,7 @@ def main():
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
 
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
+        product_overall_statistics: BacktestingOverallStatistics = BacktestingOverallStatistics(
             factor_name,
             str(report_factor_product_dir),
         )
@@ -473,18 +473,18 @@ def main():
                                                     initial_capital,
                                                     True, )
                 trix_vpt_research.run(bar_1m_df)
-                trix_vpt_research.show_trade_statistics()
+                trix_vpt_research.show_backtesting_summary()
 
-                product_overall_statistics.add_trade_statistics(product,
-                                                                trix_vpt_research.get_trade_statistics())
+                product_overall_statistics.add_backtesting_summary(product,
+                                                                   trix_vpt_research.get_trade_statistics())
                 product_overall_statistics.add_bar_df(product,
                                                       trix_vpt_research.signal_bar_df)
 
             except Exception as e:
                 print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
+        product_overall_statistics.analyze_summary_to_excel_file(product,
+                                                                 ["trix"])
 
 
 def test_jq():
@@ -510,7 +510,7 @@ def test_jq():
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
 
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
+        product_overall_statistics: BacktestingOverallStatistics = BacktestingOverallStatistics(
             factor_name,
             str(report_factor_product_dir),
         )
@@ -528,19 +528,19 @@ def test_jq():
                                                 initial_capital,
                                                 True, )
             trix_vpt_research.run(bar_1m_df)
-            trix_vpt_research.show_trade_statistics()
+            trix_vpt_research.show_backtesting_summary()
             brief_report_data_list.append(trix_vpt_research.get_trade_statistics())
 
-            product_overall_statistics.add_trade_statistics(product,
-                                                            trix_vpt_research.get_trade_statistics())
+            product_overall_statistics.add_backtesting_summary(product,
+                                                               trix_vpt_research.get_trade_statistics())
             product_overall_statistics.add_bar_df(product,
                                                   trix_vpt_research.signal_bar_df)
 
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
+        product_overall_statistics.analyze_summary_to_excel_file(product,
+                                                                 ["trix"])
 
     brief_report_file = report_factor_dir / f"brief-summary-data-{version}.txt"
     with open(brief_report_file, 'w', encoding='utf-8') as f:
@@ -604,17 +604,17 @@ def test2():
                                             100_0000,
                                             True)
         trix_vpt_research.run(bar_1m_df)
-        trix_vpt_research.show_trade_statistics()
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
+        trix_vpt_research.show_backtesting_summary()
+        product_overall_statistics: BacktestingOverallStatistics = BacktestingOverallStatistics(
             factor_name,
             str(report_factor_path)
         )
-        product_overall_statistics.add_trade_statistics(product,
-                                                        trix_vpt_research.get_trade_statistics())
+        product_overall_statistics.add_backtesting_summary(product,
+                                                           trix_vpt_research.get_trade_statistics())
         product_overall_statistics.add_bar_df(product,
                                               trix_vpt_research.signal_bar_df)
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
+        product_overall_statistics.analyze_summary_to_excel_file(product,
+                                                                 ["trix"])
 
     except Exception:
         print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")

@@ -12,10 +12,8 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.volatility import calc_atr
 from strategy_research.factor.volume_price import calc_vpt, calc_ccl
-from strategy_research.backtesting.object import BacktestingDirection, BacktestingProductOverallStatistics, \
-    BacktestingTradeStatistics
+from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
 from strategy_research.tool.contract import ContractTool
 from strategy_research.tool.data import KLineTool, BarDataManager
@@ -416,6 +414,7 @@ class TrixVptResearch(PandasBacktestingBase):
             last_trading_date = cur_trading_date
             if cur_position is None or cur_position.volume == 0:
                 """开仓检查"""
+                open_reason = ""
                 if (
                         cur_is_channel_compression
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
@@ -429,6 +428,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         self.symbol,
                         cur_close,
                         BacktestingDirection.LONG,
+                        open_reason,
                         cur_datetime,
                         cur_trading_date,
                         stop_loss,
@@ -451,6 +451,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         self.symbol,
                         cur_close,
                         BacktestingDirection.SHORT,
+                        open_reason,
                         cur_datetime,
                         cur_trading_date,
                         stop_loss,
@@ -491,10 +492,10 @@ class TrixVptResearch(PandasBacktestingBase):
                     elif (prev_is_kline_long_arr[i]
                           and prev_kline_body_ratio_arr[i] >= 0.8
                           and prev_kline_direction_arr[i] == -1
-                          and cur_intraday_bar_index >= 5
-                          and cur_return_today_open < 0
+                            # and cur_intraday_bar_index >= 5
+                            # and cur_return_today_open < 0
                     ):
-                        close_reason = "前一根巨量阴线"
+                        close_reason = "前一根巨型阴线"
                     # elif cur_close < cur_channel_low:
                     #     close_reason = '价格低于通道低点'
                     elif (
@@ -538,10 +539,10 @@ class TrixVptResearch(PandasBacktestingBase):
                     elif (prev_is_kline_long_arr[i]
                           and prev_kline_body_ratio_arr[i] >= 0.8
                           and prev_kline_direction_arr[i] == 1
-                          and cur_intraday_bar_index >= 5
-                          and cur_return_today_open > 0
+                            # and cur_intraday_bar_index >= 5
+                            # and cur_return_today_open > 0
                     ):
-                        close_reason = "前一根巨量阳线"
+                        close_reason = "前一根巨型阳线"
                     # elif cur_close > cur_channel_high:
                     #     close_reason = '价格高于通道高点'
                     elif (
@@ -637,6 +638,14 @@ class TrixVptResearch(PandasBacktestingBase):
 
 def main():
     pd.set_option('display.max_columns', None)
+    current_file = Path(__file__)
+    filename = current_file.stem
+    pattern = r'_(v\d+(?:\.\d+)*)'
+    match = re.search(pattern, filename)
+    if match:
+        version = match.group(1)
+    else:
+        raise Exception(f"filename does not standardize {filename}")
 
     report_root_dir = "factor-report"
     factor_name = "TRIX-VPT"
@@ -644,15 +653,16 @@ def main():
     initial_capital = 100_0000
     report_factor_dir = Path(f"{report_root_dir}/{factor_name}")
     report_factor_dir.mkdir(parents=True, exist_ok=True)
+    backtesting_overall_stat = BacktestingOverallStatistics(
+        factor_name,
+        report_factor_dir,
+        filename,
+        version
+    )
     for product in G_BACKTEST_PRODUCT_LIST:
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
-
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
-            factor_name,
-            str(report_factor_product_dir),
-        )
         major_contract_df = ContractTool.arrange_major_contract(symbol_bar_1d_df)
         major_contract_list = major_contract_df["symbol"].unique().tolist()
         major_contract_map = {major_contract: True for major_contract in major_contract_list}
@@ -678,18 +688,18 @@ def main():
                                                     initial_capital,
                                                     True, )
                 trix_vpt_research.run(bar_1m_df)
-                trix_vpt_research.show_trade_statistics()
+                trix_vpt_research.show_backtesting_summary()
 
-                product_overall_statistics.add_trade_statistics(product,
-                                                                trix_vpt_research.get_trade_statistics())
-                product_overall_statistics.add_bar_df(product,
-                                                      trix_vpt_research.signal_bar_df)
+                backtesting_overall_stat.add_backtesting_summary(product,
+                                                                 trix_vpt_research.get_backtesting_summary())
+                backtesting_overall_stat.add_trade_df(product,
+                                                      trix_vpt_research.get_trades_df())
+
 
             except Exception as e:
                 print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
+
 
 
 def test_jq():
@@ -709,16 +719,17 @@ def test_jq():
     initial_capital = 100_0000
     report_factor_dir = Path(f"{report_root_dir}/{factor_name}/{version}")
     report_factor_dir.mkdir(parents=True, exist_ok=True)
-    brief_report_data_list: list[BacktestingTradeStatistics] = []
+    backtesting_overall_stat = BacktestingOverallStatistics(
+        factor_name,
+        report_factor_dir,
+        filename,
+        version
+    )
     for product in G_BACKTEST_PRODUCT_LIST:
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
 
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
-            factor_name,
-            str(report_factor_product_dir),
-        )
         print(f"----------{symbol}----------")
         try:
             bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
@@ -733,25 +744,22 @@ def test_jq():
                                                 initial_capital,
                                                 True, )
             trix_vpt_research.run(bar_1m_df)
-            trix_vpt_research.show_trade_statistics()
-            brief_report_data_list.append(trix_vpt_research.get_trade_statistics())
-
-            product_overall_statistics.add_trade_statistics(product,
-                                                            trix_vpt_research.get_trade_statistics())
-            product_overall_statistics.add_bar_df(product,
-                                                  trix_vpt_research.signal_bar_df)
-
+            trix_vpt_research.show_backtesting_summary()
+            backtesting_overall_stat.add_backtesting_summary(product,
+                                                             trix_vpt_research.get_backtesting_summary())
+            backtesting_overall_stat.add_trade_df(product,
+                                                  trix_vpt_research.get_trades_df())
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
-
-    brief_report_file = report_factor_dir / f"brief-summary-data-{version}.txt"
-    with open(brief_report_file, 'w', encoding='utf-8') as f:
-        f.write(f"策略名称: {filename}\n")
-        content = '\n'.join(str(d) for d in brief_report_data_list)
-        f.write(content)
+    # brief_report_file = report_factor_dir / f"brief-summary-data-{version}.txt"
+    # with open(brief_report_file, 'w', encoding='utf-8') as f:
+    #     f.write(f"策略名称: {filename}\n")
+    #     content = '\n'.join(str(d) for d in backtesting_summary_list)
+    #     f.write(content)
+    backtesting_overall_stat.analyze_summary_to_txt_file()
+    backtesting_overall_stat.analyze_summary_to_excel_file()
+    backtesting_overall_stat.analyze_trade_to_excel_file()
 
 
 def test():
@@ -792,34 +800,43 @@ def test():
 
 def test2():
     pd.set_option('display.max_columns', None)
+    current_file = Path(__file__)
+    filename = current_file.stem
+    pattern = r'_(v\d+(?:\.\d+)*)'
+    match = re.search(pattern, filename)
+    if match:
+        version = match.group(1)
+    else:
+        raise Exception(f"filename does not standardize {filename}")
+
     report_root_dir = "factor-report"
     factor_name = "TRIX-VPT"
     bar_period = "1m"
     symbol = "FG505"
     product = "FG"
-    report_factor_path = Path(f"{report_root_dir}/{factor_name}/{product}")
-    report_factor_path.mkdir(parents=True, exist_ok=True)
+    report_factor_dir = Path(f"{report_root_dir}/{factor_name}/{product}")
+    report_factor_dir.mkdir(parents=True, exist_ok=True)
+    backtesting_overall_stat = BacktestingOverallStatistics(
+        factor_name,
+        report_factor_dir,
+        filename,
+        version
+    )
     print(f"----------{symbol}----------")
     try:
         bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
         trix_vpt_research = TrixVptResearch(factor_name,
                                             symbol,
                                             bar_period,
-                                            str(report_factor_path),
+                                            str(report_factor_dir),
                                             100_0000,
                                             True)
         trix_vpt_research.run(bar_1m_df)
-        trix_vpt_research.show_trade_statistics()
-        product_overall_statistics: BacktestingProductOverallStatistics = BacktestingProductOverallStatistics(
-            factor_name,
-            str(report_factor_path)
-        )
-        product_overall_statistics.add_trade_statistics(product,
-                                                        trix_vpt_research.get_trade_statistics())
-        product_overall_statistics.add_bar_df(product,
-                                              trix_vpt_research.signal_bar_df)
-        product_overall_statistics.analyze_product(product,
-                                                   ["trix"])
+        trix_vpt_research.show_backtesting_summary()
+        backtesting_overall_stat.add_backtesting_summary(product,
+                                                         trix_vpt_research.get_backtesting_summary())
+        backtesting_overall_stat.add_trade_df(product,
+                                              trix_vpt_research.get_trades_df())
 
     except Exception:
         print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
