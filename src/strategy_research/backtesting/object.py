@@ -605,11 +605,11 @@ class BacktestingOverallStatistics:
     def analyze_trade_to_excel_file(self,
                                     product: str | None = None):
         if product is None:
-            filename = f"all-{self.factor_name}-trades"
+            filename = f"all-{self.factor_name}-trades-{self.version}"
             trade_df_list = [item for sublist in self._trade_df_map.values() for item in sublist]
         else:
             trade_df_list = self._trade_df_map[product]
-            filename = f"{product}-{self.factor_name}-trades"
+            filename = f"{product}-{self.factor_name}-trades-{self.version}"
 
         writer = pd.ExcelWriter(self.report_path / f'{filename}.xlsx', engine='xlsxwriter')
         if trade_df_list:
@@ -652,11 +652,11 @@ class BacktestingOverallStatistics:
     def analyze_summary_to_excel_file(self,
                                       product: str | None = None, ):
         if product is None:
-            filename = f"all-{self.factor_name}-stat"
+            filename = f"all-{self.factor_name}-stat-{self.version}"
             summary_list = [item for sublist in self._summary_map.values() for item in sublist]
         else:
             summary_list = self._summary_map[product]
-            filename = f"{product}-{self.factor_name}-stat"
+            filename = f"{product}-{self.factor_name}-stat-{self.version}"
 
         if not summary_list:
             return

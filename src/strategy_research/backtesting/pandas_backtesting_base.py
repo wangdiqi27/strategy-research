@@ -18,12 +18,14 @@ class PandasBacktestingBase(ABC):
 
     def __init__(self,
                  factor_name: str,
+                 version: str,
                  symbol: str,
                  bar_period: str,
                  report_dir: str,
                  initial_capital: float,
                  enable_fig_daily_mode: bool = False, ):
         self.factor_name = factor_name
+        self.version = version
         self.symbol = symbol
         self.bar_period = bar_period
         self.report_dir = report_dir
@@ -434,7 +436,7 @@ class PandasBacktestingBase(ABC):
     def plot_update_layout(self, fig: go.Figure, ) -> go.Figure:
         # 更新布局
         fig.update_layout(
-            title=f'{self.symbol}-{self.bar_period}-{self.factor_name}',
+            title=f'{self.symbol}-{self.bar_period}-{self.factor_name}-{self.version}',
             xaxis=dict(
                 type='category',  # 👈 显式指定为分类轴，彻底杜绝时间空白
                 rangeslider=dict(visible=False),  # 关闭默认的滑动条

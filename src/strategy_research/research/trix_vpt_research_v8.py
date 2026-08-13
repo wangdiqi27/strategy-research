@@ -23,6 +23,7 @@ class TrixVptResearch(PandasBacktestingBase):
 
     def __init__(self,
                  factor_name: str,
+                 version: str,
                  symbol: str,
                  bar_period: str,
                  report_dir: str,
@@ -41,6 +42,7 @@ class TrixVptResearch(PandasBacktestingBase):
                  vpt_ma_period: int = 14,
                  vpt_z_score_threshold: float = 1.5, ):
         super().__init__(factor_name,
+                         version,
                          symbol,
                          bar_period,
                          report_dir,
@@ -127,9 +129,9 @@ class TrixVptResearch(PandasBacktestingBase):
             kline_range_top_n=lambda x: x["kline_range"].rolling(60).quantile(0.9),
             is_kline_long=lambda x: (x['kline_range'] >= x['kline_range_top_n']) & (x['kline_range'] > 0),
             kline_body_ratio=lambda x: x['kline_abs_body'] / x['kline_range'],
-            kline_upper_shadow_ratio=lambda x: (x['kline_upper_shadow'] / x['kline_range']).replace(0, np.nan).fillna(
+            kline_upper_shadow_ratio=lambda x: (x['kline_upper_shadow'] / x['kline_range'].replace(0, np.nan)).fillna(
                 0),
-            kline_lower_shadow_ratio=lambda x: (x['kline_lower_shadow'] / x['kline_range']).replace(0, np.nan).fillna(
+            kline_lower_shadow_ratio=lambda x: (x['kline_lower_shadow'] / x['kline_range'].replace(0, np.nan)).fillna(
                 0),
 
             # volume
@@ -682,6 +684,7 @@ def main():
                 #         bar_1m_df['datetime'] <= major_contract_end_time)
                 # bar_1m_df = bar_1m_df.loc[mask]
                 trix_vpt_research = TrixVptResearch(factor_name,
+                                                    version,
                                                     symbol,
                                                     bar_period,
                                                     str(report_factor_product_dir),
@@ -738,6 +741,7 @@ def test_jq():
                 continue
 
             trix_vpt_research = TrixVptResearch(factor_name,
+                                                version,
                                                 symbol,
                                                 bar_period,
                                                 str(report_factor_product_dir),
@@ -826,6 +830,7 @@ def test2():
     try:
         bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
         trix_vpt_research = TrixVptResearch(factor_name,
+                                            version,
                                             symbol,
                                             bar_period,
                                             str(report_factor_dir),

@@ -352,7 +352,7 @@ class TrixVptResearch(PandasBacktestingBase):
             intraday_open_gap_down_pct=lambda x: x["intraday_open_gap_down_point"] / x["daily_prev_close"],
             intraday_is_open_gap_up_covered=lambda x: x['intraday_is_open_gap_up'] & (x['low'] <= x['daily_prev_high']),
             intraday_is_open_gap_down_covered=lambda x: x['intraday_is_open_gap_down'] & (
-                        x['high'] >= x['daily_prev_low']),
+                    x['high'] >= x['daily_prev_low']),
         )
 
         # 分钟级数据日内情况
@@ -384,13 +384,13 @@ class TrixVptResearch(PandasBacktestingBase):
                                                         np.where(x['intraday_kline_body'] < 0, -1, 0)),
             intraday_kline_body_ratio=lambda x: x['intraday_kline_abs_body'] / x['intraday_kline_range'],
             intraday_kline_upper_shadow_ratio=lambda x: (
-                        x['intraday_kline_upper_shadow'] / x['intraday_kline_range'].replace(0, np.nan)).fillna(
+                    x['intraday_kline_upper_shadow'] / x['intraday_kline_range'].replace(0, np.nan)).fillna(
                 0),
             intraday_kline_lower_shadow_ratio=lambda x: (
-                        x['intraday_kline_lower_shadow'] / x['intraday_kline_range'].replace(0, np.nan)).fillna(
+                    x['intraday_kline_lower_shadow'] / x['intraday_kline_range'].replace(0, np.nan)).fillna(
                 0),
             intraday_is_kline_long=lambda x: (x['intraday_kline_range'] >= x['daily_kline_range_top_n']) & (
-                        x['intraday_kline_range'] > 0),
+                    x['intraday_kline_range'] > 0),
         )
 
         daily_cols = [col for col in daily_exec_df.columns if col.startswith('daily_')]
@@ -579,6 +579,11 @@ class TrixVptResearch(PandasBacktestingBase):
                           and cur_return_today_open < 0
                     ):
                         close_reason = "跳空反转"
+                    elif (intraday_is_kline_long_arr[i]
+                          and intraday_kline_body_ratio_arr[i] >= 0.8
+                          and intraday_kline_direction_arr[i] == -1
+                    ):
+                        close_reason = "当前是巨型阴线"
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == -1
@@ -627,6 +632,11 @@ class TrixVptResearch(PandasBacktestingBase):
                           and cur_return_today_open > 0
                     ):
                         close_reason = "跳空反转"
+                    elif (intraday_is_kline_long_arr[i]
+                          and intraday_kline_body_ratio_arr[i] >= 0.8
+                          and intraday_kline_direction_arr[i] == 1
+                    ):
+                        close_reason = "当前是巨型阳线"
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == 1
