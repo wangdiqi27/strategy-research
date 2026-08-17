@@ -1,3 +1,4 @@
+from strategy_research.config.exchange.CFFEX import CFFEX_EXCHANGE_CONFIG
 from strategy_research.config.exchange.CZCE import CZCE_EXCHANGE_CONFIG
 from strategy_research.config.exchange.DCE import DCE_EXCHANGE_CONFIG
 from strategy_research.config.exchange.GFEX import GFEX_EXCHANGE_CONFIG
@@ -11,6 +12,7 @@ _CONTRACT_CONFIGS = {
     **GFEX_EXCHANGE_CONFIG,
     **INE_EXCHANGE_CONFIG,
     **SHFE_EXCHANGE_CONFIG,
+    **CFFEX_EXCHANGE_CONFIG,
 }
 
 

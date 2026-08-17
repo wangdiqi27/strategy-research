@@ -22,7 +22,12 @@ class ContractTool:
         if m:
             return m.group(1)
 
-        # 规则2：普通合约 — 品种 + 数字
+        # 规则2: 套利合约 — 品种+数字-品种+数字
+        m = re.match(r'^([a-zA-Z]+)\d+-([a-zA-Z]+)\d+$', contract)
+        if m:
+            return m.group(1)
+
+        # 规则3: 普通合约 — 品种 + 数字
         m = re.match(r'^([a-zA-Z]+)\d+$', contract)
         if m:
             return m.group(1)

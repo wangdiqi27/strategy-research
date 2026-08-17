@@ -2,7 +2,7 @@ import pickle
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from vnpy.trader.constant import Interval
+from vnpy.trader.constant import Interval, Exchange
 from datetime import datetime, timedelta, time
 
 import numpy as np
@@ -35,6 +35,10 @@ class BarDataManager:
     @classmethod
     def _get_data_cache_1d_excel_dir(cls) -> Path:
         return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-excel"
+
+    @classmethod
+    def _get_data_cache_1m_spread_df_dir(cls) -> Path:
+        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-index-spread"
 
     @classmethod
     def _get_data_cache_1m_bar_list_dir(cls) -> Path:
@@ -175,6 +179,31 @@ class BarDataManager:
             return pd.DataFrame()
 
     @classmethod
+    def load_spread_bar_df_from_cache(cls,
+                                      symbol: str,
+                                      period: str):
+        if period == "1m":
+            cache_dir = cls._get_data_cache_1m_spread_df_dir()
+        else:
+            raise Exception("unsupported")
+
+        try:
+            cache_file = cache_dir / f"{symbol}.csv"
+            bar_df = pd.read_csv(cache_file, parse_dates=["datetime"])
+
+            bar_df["open_interest"] = 0
+            bar_df["volume"] = 0
+            bar_df["turnover"] = 0
+            bar_df["volume"] = 0
+            bar_df["exchange"] = Exchange.CFFEX.value
+            bar_df["interval"] = Interval.MINUTE.value
+
+            return bar_df
+        except Exception as e:
+            print(f"{symbol}-{period} csv file can't find, exception: {e}")
+            return pd.DataFrame()
+
+    @classmethod
     def get_symbols_by_product_from_cache(cls,
                                           product: str,
                                           period: str):
@@ -216,6 +245,23 @@ class BarDataManager:
 
         bar_df = cls.load_bar_df_from_cache(symbol, period)
         symbol_bar_df_cache[symbol] = bar_df
+
+        return bar_df
+
+    @classmethod
+    def load_spread_symbol_from_cache(cls,
+                                      spread_symbol: str,
+                                      period: str) -> DataFrame:
+        if period == "1d":
+            raise Exception("unsupported")
+        else:
+            symbol_bar_df_cache = cls._SYMBOL_BAR_1M_DF_CACHE
+
+        if spread_symbol in symbol_bar_df_cache:
+            return symbol_bar_df_cache[spread_symbol]
+
+        bar_df = cls.load_spread_bar_df_from_cache(spread_symbol, period)
+        symbol_bar_df_cache[spread_symbol] = bar_df
 
         return bar_df
 
