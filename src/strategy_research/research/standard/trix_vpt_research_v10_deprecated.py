@@ -1,6 +1,6 @@
 import re
 import traceback
-from datetime import time, date
+from datetime import time
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +12,6 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.structure import calc_swing_points, calc_zigzag
 from strategy_research.factor.volume_price import calc_vpt, calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
@@ -30,6 +29,7 @@ class TrixVptResearch(PandasBacktestingBase):
                  report_dir: str,
                  initial_capital: float,
                  enable_fig_daily_mode: bool,
+                 enable_debug_mode: bool,
                  atr_period: int = 14,
                  volume_period: int = 14,
                  volume_threshold: float = 1.5,
@@ -48,7 +48,8 @@ class TrixVptResearch(PandasBacktestingBase):
                          bar_period,
                          report_dir,
                          initial_capital,
-                         enable_fig_daily_mode)
+                         enable_fig_daily_mode,
+                         enable_debug_mode)
         self.atr_period = atr_period
         self.volume_period = volume_period
         self.volume_threshold = volume_threshold
@@ -63,9 +64,6 @@ class TrixVptResearch(PandasBacktestingBase):
 
         self.vpt_ma_period = vpt_ma_period
         self.vpt_z_score_threshold = vpt_z_score_threshold
-
-        self._daily_signal_df: DataFrame = DataFrame()
-        self._daily_exec_df: DataFrame = DataFrame()
 
     @property
     def parameters(self):
@@ -85,10 +83,6 @@ class TrixVptResearch(PandasBacktestingBase):
                                        self.vpt_ma_period, )
         daily_signal_bar_df = calc_macd(daily_signal_bar_df)
         daily_signal_bar_df = calc_ccl(daily_signal_bar_df)
-        daily_signal_bar_df = calc_swing_points(daily_signal_bar_df,
-                                                3,
-                                                3,
-                                                True)
         daily_signal_bar_df = daily_signal_bar_df.assign(
             # tr
             tr=lambda x: np.maximum(
@@ -300,32 +294,8 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_pos_days",
             "trix_neg_days",
             "trix_allow_close_long",
-            "trix_allow_close_short",
-
-            # swing point
-            "swing_high",
-            "swing_high_price",
-            "swing_low",
-            "swing_low_price",
-            "swing_high_structure",
-            "swing_low_structure",
-            "swing_market_structure",
-            "swing_trend_direction",
-            "swing_signal",
-            "swing_signal_type",
-
-            "swing_high_confirmed",
-            "swing_low_confirmed",
-            "swing_high_price_confirmed",
-            "swing_low_price_confirmed",
-            "swing_latest_swing_high",
-            "swing_latest_swing_low",
-            "swing_market_structure_confirmed",
-            "swing_trend_direction_confirmed",
-            "swing_signal_confirmed",
-            "swing_signal_type_confirmed",
+            "trix_allow_close_short"
         ]
-
         strict_columns = [
             # atr
             "atr_14",
@@ -364,20 +334,17 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_allow_close_long",
             "trix_allow_close_short",
         ]
-
         daily_exec_bar_df = daily_exec_bar_df[require_columns]
         daily_exec_bar_df = daily_exec_bar_df.dropna(subset=strict_columns)
         daily_exec_bar_df = daily_exec_bar_df.add_prefix("daily_")
         daily_exec_bar_df["trading_date"] = daily_signal_bar_df["trading_date"]
         daily_exec_bar_df = daily_exec_bar_df.reset_index(drop=True)
 
-        daily_exec_bar_df.to_csv(f"exec-{self.symbol}.csv", index=True)
-        daily_signal_bar_df[require_columns].to_csv(f"signal-{self.symbol}.csv", index=True)
-
-        self._daily_exec_df = daily_exec_bar_df
-        self._daily_signal_df = daily_signal_bar_df
-
         daily_strict_columns = [f"daily_{item}" for item in strict_columns]
+
+        signal_require_columns = require_columns.copy()
+        signal_require_columns.append("trading_date")
+        daily_signal_bar_df = daily_signal_bar_df[signal_require_columns]
 
         return daily_exec_bar_df, daily_signal_bar_df, daily_strict_columns
 
@@ -498,9 +465,6 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_prev_is_kline_long_arr = bar_1m_exec_df["daily_is_kline_long"].to_numpy()
         daily_prev_kline_body_ratio_arr = bar_1m_exec_df["daily_kline_body_ratio"].to_numpy()
 
-        ## swing structure
-        daily_swing_trend_direction_confirmed_arr = bar_1m_exec_df["daily_swing_trend_direction_confirmed"].to_numpy()
-
         # 分钟级指标
 
         ## 价格涨跌情况
@@ -534,7 +498,6 @@ class TrixVptResearch(PandasBacktestingBase):
         }
 
         ## 上一根Bar的交易日期
-        open_memory: dict[date, bool] = {}
         last_trading_date = None
 
         ## 持仓后数据统计
@@ -575,17 +538,12 @@ class TrixVptResearch(PandasBacktestingBase):
 
             if cur_position is None or cur_position.volume == 0:
                 """开仓检查"""
-                has_memory = open_memory.get(cur_trading_date, False)
-                if has_memory:
-                    continue
-
                 open_reason = ""
                 if (
                         cur_is_channel_compression
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open > 0
-                        and daily_swing_trend_direction_confirmed_arr[i] != "strong_downtrend"
                 ):
                     """多头开仓"""
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
@@ -603,14 +561,12 @@ class TrixVptResearch(PandasBacktestingBase):
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
-                    open_memory[cur_trading_date] = True
 
                 elif (
                         cur_is_channel_compression
                         and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open < 0
-                        and daily_swing_trend_direction_confirmed_arr[i] != "strong_uptrend"
                 ):
                     """空头开仓"""
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
@@ -628,7 +584,6 @@ class TrixVptResearch(PandasBacktestingBase):
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
-                    open_memory[cur_trading_date] = True
             else:
                 """平仓检查"""
                 if cur_high >= minute_high_arr[after_holding_high_bar_index]:
@@ -660,6 +615,11 @@ class TrixVptResearch(PandasBacktestingBase):
                           and cur_return_today_open < 0
                     ):
                         close_reason = "跳空反转"
+                    elif (intraday_is_kline_long_arr[i]
+                          and intraday_kline_body_ratio_arr[i] >= 0.8
+                          and intraday_kline_direction_arr[i] == -1
+                    ):
+                        close_reason = "当前是巨型阴线"
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == -1
@@ -676,8 +636,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    elif daily_swing_trend_direction_confirmed_arr[i] == "strong_downtrend":
-                        close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
 
@@ -710,6 +668,11 @@ class TrixVptResearch(PandasBacktestingBase):
                           and cur_return_today_open > 0
                     ):
                         close_reason = "跳空反转"
+                    elif (intraday_is_kline_long_arr[i]
+                          and intraday_kline_body_ratio_arr[i] >= 0.8
+                          and intraday_kline_direction_arr[i] == 1
+                    ):
+                        close_reason = "当前是巨型阳线"
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == 1
@@ -726,8 +689,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_pos_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    elif daily_swing_trend_direction_confirmed_arr[i] == "strong_uptrend":
-                        close_reason = "HH-HL 上升结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
 
@@ -863,7 +824,8 @@ def main():
                                                     bar_period,
                                                     str(report_factor_product_dir),
                                                     initial_capital,
-                                                    True, )
+                                                    True,
+                                                    True)
                 trix_vpt_research.run(bar_1m_df)
                 trix_vpt_research.show_backtesting_summary()
 
@@ -918,7 +880,8 @@ def test_jq():
                                                 bar_period,
                                                 str(report_factor_product_dir),
                                                 initial_capital,
-                                                True, )
+                                                True,
+                                                True)
             trix_vpt_research.run(bar_1m_df)
             trix_vpt_research.show_backtesting_summary()
             backtesting_overall_stat.add_backtesting_summary(product,
@@ -1007,6 +970,7 @@ def test2():
                                             bar_period,
                                             str(report_factor_dir),
                                             100_0000,
+                                            True,
                                             True)
         trix_vpt_research.run(bar_1m_df)
         trix_vpt_research.show_backtesting_summary()

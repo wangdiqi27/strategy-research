@@ -23,7 +23,8 @@ class PandasBacktestingBase(ABC):
                  bar_period: str,
                  report_dir: str,
                  initial_capital: float,
-                 enable_fig_daily_mode: bool = False, ):
+                 enable_fig_daily_mode: bool = False,
+                 enable_debug_mode: bool = False):
         self.factor_name = factor_name
         self.version = version
         self.symbol = symbol
@@ -33,6 +34,7 @@ class PandasBacktestingBase(ABC):
         self.capital = initial_capital
         self.datetime_formater = '%Y%m%d %H:%M'
         self.enable_fig_daily_mode = enable_fig_daily_mode
+        self.enable_debug_mode = enable_debug_mode
 
         self.bar_start_datetime: datetime | None = None
         self.bar_end_datetime: datetime | None = None
@@ -72,6 +74,14 @@ class PandasBacktestingBase(ABC):
         print(f"{'-' * 10} complete computing indicators {'-' * 10}")
         self._exec_bar_df = exec_bar_df
         self._signal_bar_df = signal_bar_df
+
+        if self.enable_debug_mode:
+            print(f"{'-' * 10} start saving debug data {'-' * 10}")
+            root_path = Path(f"{self.report_dir}")
+            self._exec_bar_df.to_csv(root_path / f"{self.symbol}-exec.csv", index=True)
+            self._signal_bar_df.to_csv(root_path / f"{self.symbol}-signal.csv", index=True)
+            print(f"{'-' * 10} complete saving debug data {'-' * 10}")
+
         print(f"{'-' * 10} start hybrid backtest {'-' * 10}")
         self.hybrid_backtest(exec_bar_df)
         print(f"{'-' * 10} complete hybrid backtest {'-' * 10}")
@@ -126,6 +136,7 @@ class PandasBacktestingBase(ABC):
         backtesting_summary = self.get_backtesting_summary()
 
         print(backtesting_summary)
+
 
     @abstractmethod
     def create_kline_fig(self) -> go.Figure:

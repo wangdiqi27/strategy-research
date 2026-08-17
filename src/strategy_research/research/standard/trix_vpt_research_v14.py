@@ -30,6 +30,7 @@ class TrixVptResearch(PandasBacktestingBase):
                  report_dir: str,
                  initial_capital: float,
                  enable_fig_daily_mode: bool,
+                 enable_debug_mode: bool,
                  atr_period: int = 14,
                  volume_period: int = 14,
                  volume_threshold: float = 1.5,
@@ -48,7 +49,8 @@ class TrixVptResearch(PandasBacktestingBase):
                          bar_period,
                          report_dir,
                          initial_capital,
-                         enable_fig_daily_mode)
+                         enable_fig_daily_mode,
+                         enable_debug_mode)
         self.atr_period = atr_period
         self.volume_period = volume_period
         self.volume_threshold = volume_threshold
@@ -63,9 +65,6 @@ class TrixVptResearch(PandasBacktestingBase):
 
         self.vpt_ma_period = vpt_ma_period
         self.vpt_z_score_threshold = vpt_z_score_threshold
-
-        self._daily_signal_df: DataFrame = DataFrame()
-        self._daily_exec_df: DataFrame = DataFrame()
 
     @property
     def parameters(self):
@@ -181,7 +180,7 @@ class TrixVptResearch(PandasBacktestingBase):
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
 
-        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df,)
+        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df, )
 
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
@@ -355,13 +354,11 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_exec_bar_df["trading_date"] = daily_signal_bar_df["trading_date"]
         daily_exec_bar_df = daily_exec_bar_df.reset_index(drop=True)
 
-        daily_exec_bar_df.to_csv(f"exec-{self.symbol}.csv", index=True)
-        daily_signal_bar_df[require_columns].to_csv(f"signal-{self.symbol}.csv", index=True)
-
-        self._daily_exec_df = daily_exec_bar_df
-        self._daily_signal_df = daily_signal_bar_df
-
         daily_strict_columns = [f"daily_{item}" for item in strict_columns]
+
+        signal_require_columns = require_columns.copy()
+        signal_require_columns.append("trading_date")
+        daily_signal_bar_df = daily_signal_bar_df[signal_require_columns]
 
         return daily_exec_bar_df, daily_signal_bar_df, daily_strict_columns
 
@@ -865,7 +862,8 @@ def main():
                                                     bar_period,
                                                     str(report_factor_product_dir),
                                                     initial_capital,
-                                                    True, )
+                                                    True,
+                                                    True)
                 trix_vpt_research.run(bar_1m_df)
                 trix_vpt_research.show_backtesting_summary()
 
@@ -920,7 +918,8 @@ def test_jq():
                                                 bar_period,
                                                 str(report_factor_product_dir),
                                                 initial_capital,
-                                                True, )
+                                                True,
+                                                True)
             trix_vpt_research.run(bar_1m_df)
             trix_vpt_research.show_backtesting_summary()
             backtesting_overall_stat.add_backtesting_summary(product,
@@ -1009,6 +1008,7 @@ def test2():
                                             bar_period,
                                             str(report_factor_dir),
                                             100_0000,
+                                            True,
                                             True)
         trix_vpt_research.run(bar_1m_df)
         trix_vpt_research.show_backtesting_summary()
