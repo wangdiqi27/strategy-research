@@ -601,7 +601,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     adjust_stop_loss = -1
                     if cur_trading_date != cur_position.open_trading_date:
                         after_holding_high = minute_high_arr[after_holding_high_bar_index]
-                        adjust_stop_loss = max(cur_position.stop_loss, after_holding_high * 0.9)
+                        adjust_stop_loss = max(cur_position.stop_loss, after_holding_high * 0.90)
 
                     if cur_close <= cur_position.stop_loss:
                         close_reason = '止损'

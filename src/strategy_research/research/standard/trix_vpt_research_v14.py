@@ -307,6 +307,14 @@ class TrixVptResearch(PandasBacktestingBase):
             "zigzag_ref_price",
             "zigzag_structure",
             "zigzag_structure_confirmed",
+            "zigzag_last_high",
+            "zigzag_last_high_confirmed",
+            "zigzag_last_low",
+            "zigzag_last_low_confirmed",
+            "zigzag_last_high_index",
+            "zigzag_last_high_index_confirmed",
+            "zigzag_last_low_index",
+            "zigzag_last_low_index_confirmed",
         ]
 
         strict_columns = [
@@ -481,6 +489,9 @@ class TrixVptResearch(PandasBacktestingBase):
 
         ## swing structure
         daily_zigzag_structure_confirmed_arr = bar_1m_exec_df["daily_zigzag_structure_confirmed"].to_numpy()
+        daily_zigzag_last_high_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_high_confirmed"].to_numpy()
+        daily_zigzag_last_low_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_low_confirmed"].to_numpy()
+
 
         # 分钟级指标
 
@@ -569,7 +580,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open > 0
-                        and daily_zigzag_structure_confirmed_arr[i] != "LH-LL"
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "LH-LL")
                 ):
                     """多头开仓"""
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
@@ -594,7 +605,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open < 0
-                        and daily_zigzag_structure_confirmed_arr[i] != "HH-HL"
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "HH-HL")
                 ):
                     """空头开仓"""
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)

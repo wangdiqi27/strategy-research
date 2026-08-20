@@ -182,12 +182,12 @@ def _calc_zigzag_structure(
     high_pivots = [pivot for pivot in latest_4_pivots if pivot[2] == 1]
     low_pivots = [pivot for pivot in latest_4_pivots if pivot[2] == -1]
 
-    if high_pivots[0][1] < high_pivots[1][1]:
+    if high_pivots[1][1] > high_pivots[0][1]:
         high_structure = "HH"
     else:
         high_structure = "LH"
 
-    if low_pivots[0][1] < low_pivots[1][1]:
+    if low_pivots[1][1] > low_pivots[0][1]:
         low_structure = "HL"
     else:
         low_structure = "LL"
@@ -203,7 +203,7 @@ def _calc_zigzag_core_logic_with_confirmation(
         atr: np.ndarray,
         atr_ratio: float,
         min_swing_bars: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     返回:
     1. pivot_types: 极值点标记 (在极值点位置显示类型)
@@ -219,6 +219,12 @@ def _calc_zigzag_core_logic_with_confirmation(
     confirmed_signals = np.zeros(n, dtype=np.int8)  # 用于回测信号
     confirmed_prices = np.full(n, np.nan)  # 用于回测价格参考
     confirmed_structure = np.zeros(n, dtype='U10')
+
+    # 最近高点/低点序列
+    latest_highs = np.full(n, np.nan)
+    latest_highs_index = np.full(n, np.nan)
+    latest_lows = np.full(n, np.nan)
+    latest_lows_index = np.full(n, np.nan)
 
     # 用于保存已确认的极值点信息: (index, price, type) type: 1=高, -1=低
     confirmed_pivots: list[tuple[int, float, int]] = []
@@ -259,6 +265,9 @@ def _calc_zigzag_core_logic_with_confirmation(
                     # 记录已确认最高值
                     confirmed_prices[i] = high[warmup_high_idx]
 
+                    latest_highs[i] = high[warmup_high_idx]
+                    latest_highs_index[i] = warmup_high_idx
+
                     # 开始找最低值
                     current_find_type = -1
                     current_extreme_idx = warmup_low_idx
@@ -272,6 +281,9 @@ def _calc_zigzag_core_logic_with_confirmation(
                     confirmed_signals[i] = 1
                     # 记录已确认最高值
                     confirmed_prices[i] = low[warmup_low_idx]
+
+                    latest_lows[i] = low[warmup_low_idx]
+                    latest_lows_index[i] = warmup_low_idx
 
                     # 开始找最高值
                     current_find_type = 1
@@ -309,6 +321,9 @@ def _calc_zigzag_core_logic_with_confirmation(
                     confirmed_signals[i] = -1  # 高点确认，趋势转空
                     confirmed_prices[i] = high[current_extreme_idx]
 
+                    latest_highs[i] = high[current_extreme_idx]
+                    latest_highs_index[i] = current_extreme_idx
+
                     # 3. 状态切换
                     current_find_type = -1
                     current_extreme_idx = i
@@ -333,6 +348,9 @@ def _calc_zigzag_core_logic_with_confirmation(
                     confirmed_signals[i] = 1  # 低点确认，趋势转多
                     confirmed_prices[i] = low[current_extreme_idx]
 
+                    latest_lows[i] = low[current_extreme_idx]
+                    latest_lows_index[i] = current_extreme_idx
+
                     # 3. 状态切换
                     current_find_type = 1
                     current_extreme_idx = i
@@ -342,7 +360,14 @@ def _calc_zigzag_core_logic_with_confirmation(
                     zigzag_structure = _calc_zigzag_structure(confirmed_pivots)
                     confirmed_structure[i] = zigzag_structure
 
-    return pivot_types, confirmed_signals, confirmed_prices, confirmed_structure
+    return (pivot_types,
+            confirmed_signals,
+            confirmed_prices,
+            confirmed_structure,
+            latest_highs,
+            latest_lows,
+            latest_highs_index,
+            latest_lows_index)
 
 
 # ============================================================
@@ -366,7 +391,14 @@ def calc_zigzag(
     atr = df[atr_col].to_numpy()
 
     # 核心计算
-    pivot_types, confirmed_signals, confirmed_prices, structure = \
+    (pivot_types,
+     confirmed_signals,
+     confirmed_prices,
+     structure,
+     latest_highs,
+     latest_lows,
+     latest_highs_index,
+     latest_lows_index) = \
         _calc_zigzag_core_logic_with_confirmation(high, low, atr, atr_ratio, min_swing_bars)
 
     # 1. 绘图用数据 (极值点物理位置)
@@ -392,5 +424,21 @@ def calc_zigzag(
 
     df['zigzag_structure'] = df['zigzag_structure'].fillna('')
     df['zigzag_structure_confirmed'] = df['zigzag_structure_confirmed'].fillna('')
+
+    df['zigzag_last_high'] = latest_highs
+    df['zigzag_last_high'] = df['zigzag_last_high'].ffill()
+    df['zigzag_last_high_confirmed'] = df['zigzag_last_high'].shift(1)
+
+    df['zigzag_last_low'] = latest_lows
+    df['zigzag_last_low'] = df['zigzag_last_low'].ffill()
+    df['zigzag_last_low_confirmed'] = df['zigzag_last_low'].shift(1)
+
+    df['zigzag_last_high_index'] = latest_highs_index
+    df['zigzag_last_high_index'] = df['zigzag_last_high_index'].ffill()
+    df['zigzag_last_high_index_confirmed'] = df['zigzag_last_high_index'].shift(1)
+
+    df['zigzag_last_low_index'] = latest_lows_index
+    df['zigzag_last_low_index'] = df['zigzag_last_low_index'].ffill()
+    df['zigzag_last_low_index_confirmed'] = df['zigzag_last_low_index'].shift(1)
 
     return df

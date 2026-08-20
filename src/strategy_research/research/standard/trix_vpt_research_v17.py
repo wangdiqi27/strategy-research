@@ -84,10 +84,6 @@ class TrixVptResearch(PandasBacktestingBase):
                                        self.vpt_ma_period, )
         daily_signal_bar_df = calc_macd(daily_signal_bar_df)
         daily_signal_bar_df = calc_ccl(daily_signal_bar_df)
-        daily_signal_bar_df = calc_swing_points(daily_signal_bar_df,
-                                                4,
-                                                4,
-                                                True)
         daily_signal_bar_df = daily_signal_bar_df.assign(
             # tr
             tr=lambda x: np.maximum(
@@ -183,6 +179,8 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df['trix_pos_days'] = is_trix_hist_pos.groupby(pos_group).cumsum()
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
+
+        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df, )
 
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
@@ -301,28 +299,22 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_allow_close_long",
             "trix_allow_close_short",
 
-            # swing point
-            "swing_high",
-            "swing_high_price",
-            "swing_low",
-            "swing_low_price",
-            "swing_high_structure",
-            "swing_low_structure",
-            "swing_market_structure",
-            "swing_trend_direction",
-            "swing_signal",
-            "swing_signal_type",
-
-            "swing_high_confirmed",
-            "swing_low_confirmed",
-            "swing_high_price_confirmed",
-            "swing_low_price_confirmed",
-            "swing_latest_swing_high",
-            "swing_latest_swing_low",
-            "swing_market_structure_confirmed",
-            "swing_trend_direction_confirmed",
-            "swing_signal_confirmed",
-            "swing_signal_type_confirmed",
+            # zigzag
+            "zigzag_pivot_type",
+            "zigzag_pivot_price",
+            "zigzag_signal",
+            "zigzag_confirmed_pivot_price",
+            "zigzag_ref_price",
+            "zigzag_structure",
+            "zigzag_structure_confirmed",
+            "zigzag_last_high",
+            "zigzag_last_high_confirmed",
+            "zigzag_last_low",
+            "zigzag_last_low_confirmed",
+            "zigzag_last_high_index",
+            "zigzag_last_high_index_confirmed",
+            "zigzag_last_low_index",
+            "zigzag_last_low_index_confirmed",
         ]
 
         strict_columns = [
@@ -496,7 +488,9 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_prev_kline_body_ratio_arr = bar_1m_exec_df["daily_kline_body_ratio"].to_numpy()
 
         ## swing structure
-        daily_swing_trend_direction_confirmed_arr = bar_1m_exec_df["daily_swing_trend_direction_confirmed"].to_numpy()
+        daily_zigzag_structure_confirmed_arr = bar_1m_exec_df["daily_zigzag_structure_confirmed"].to_numpy()
+        daily_zigzag_last_high_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_high_confirmed"].to_numpy()
+        daily_zigzag_last_low_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_low_confirmed"].to_numpy()
 
         # 分钟级指标
 
@@ -576,13 +570,17 @@ class TrixVptResearch(PandasBacktestingBase):
                 if has_memory:
                     continue
 
+                if daily_zigzag_structure_confirmed_arr[i] == "":
+                    continue
+
                 open_reason = ""
                 if (
                         cur_is_channel_compression
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open > 0
-                        and daily_swing_trend_direction_confirmed_arr[i] != "strong_downtrend"
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
+                                 and cur_close < daily_zigzag_last_high_confirmed_arr[i])
                 ):
                     """多头开仓"""
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
@@ -607,7 +605,8 @@ class TrixVptResearch(PandasBacktestingBase):
                         and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open < 0
-                        and daily_swing_trend_direction_confirmed_arr[i] != "strong_uptrend"
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
+                                 and cur_close > daily_zigzag_last_low_confirmed_arr[i])
                 ):
                     """空头开仓"""
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
@@ -673,8 +672,9 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    elif daily_swing_trend_direction_confirmed_arr[i] == "strong_downtrend":
-                        close_reason = "LH-LL 下降结构"
+                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
+                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
+                    #     close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
 
@@ -723,8 +723,9 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_pos_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    elif daily_swing_trend_direction_confirmed_arr[i] == "strong_uptrend":
-                        close_reason = "HH-HL 上升结构"
+                    # elif (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
+                    #       and cur_close > daily_zigzag_last_low_confirmed_arr[i]):
+                    #     close_reason = "HH-HL 上升结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
 
@@ -805,6 +806,21 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=1,
             col=1)
+
+        # zigzag
+        fig.add_trace(
+            go.Scatter(
+                x=datetime_str,
+                y=bar_df['zigzag_pivot_price'],
+                mode='lines',
+                name='ZigZag',
+                line=dict(
+                    color='#00F5FF',  # 蓝色线条
+                    width=3
+                ),
+                connectgaps=True,
+            )
+        )
 
         return fig
 
