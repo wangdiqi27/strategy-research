@@ -4,6 +4,7 @@ from datetime import datetime, date
 from enum import Enum
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xlsxwriter
 from pandas import DataFrame
@@ -36,12 +37,63 @@ class BacktestingDailyEquityRecorder:
             daily_equity: BacktestingDailyEquity):
         self.daily_equity_list.append(daily_equity)
 
+    def calc_period_return(self,) -> tuple[list, list]:
+        df = self.get_all_daily_equity_as_df()
+        first_date = df['trading_date'].iloc[0]
+        virtual_date = first_date - pd.Timedelta(days=1)
+        virtual_row = pd.DataFrame({'trading_date': [virtual_date], 'equity': [self.initial_capital]})
+        df = pd.concat([virtual_row, df], ignore_index=True)
+
+        df = df.set_index('trading_date')
+        equity = df['equity']
+        # ============================================================
+        # 1. 自然年收益率 (基于日历 1月1日 - 12月31日)
+        # ============================================================
+        yearly_data = []
+        for year, group in equity.groupby(equity.index.year):
+            last_eq = group.iloc[-1]
+            if not yearly_data:
+                first_eq = equity.iloc[0]  # 取到虚拟行的 initial_capital
+            else:
+                first_eq = yearly_data[-1]['final-equity']
+
+            ret = (last_eq / first_eq) - 1 if first_eq != 0 else np.nan
+            yearly_data.append({
+                'period': year,
+                'initial-equity': first_eq,
+                'final-equity': last_eq,
+                'return': ret
+            })
+
+        # ============================================================
+        # 2. 自然半年收益率 (基于日历 1-6月, 7-12月)
+        # ============================================================
+        half_labels = equity.index.year.astype(str) + np.where(equity.index.month <= 6, "-上半年", "-下半年")
+        half_data = []
+        for label, group in equity.groupby(half_labels):
+            last_eq = group.iloc[-1]
+            if not half_data:
+                first_eq = equity.iloc[0]
+            else:
+                first_eq = half_data[-1]['final-equity']
+
+            ret = (last_eq / first_eq) - 1 if first_eq != 0 else np.nan
+            half_data.append({
+                'period': label,
+                'initial-equity': first_eq,
+                'final-equity': last_eq,
+                'return': ret,
+            })
+
+
+        return yearly_data, half_data
+
     def get_all_daily_equity_as_df(self) -> DataFrame:
         if not self.daily_equity_list:
             return pd.DataFrame()
 
         df = pd.DataFrame(self.daily_equity_list)
-
+        df["trading_date"] = pd.to_datetime(df['trading_date'])
         df["daily_return"] = df['equity'].pct_change().fillna(0.0)
         df['cumulative_return'] = (df['equity'] - self.initial_capital) / self.initial_capital
         df['cum_max'] = df['equity'].cummax()
@@ -527,6 +579,8 @@ class BacktestingAccount:
 class BacktestingSummary:
     symbol: str
     trade_stats: BacktestingTradeStatistics
+    yearly_return_stat_list: list
+    half_yearly_return_stat_list: list
     max_drawdown: float = 0.0
     max_drawdown_duration: int = 0
     # K 线的开始时间
@@ -555,6 +609,32 @@ class BacktestingSummary:
         # 百分比格式化
         fmt_p = lambda x: f"{x:.2f}%" if x is not None else "0.00%"
 
+        yearly_stat_str_list = []
+        for item in self.yearly_return_stat_list:
+            yearly_stat_str_list.extend(
+                [
+                    f"  年份：{item['period']}",
+                    f"  期初权益：{item['initial-equity']}",
+                    f"  期末权益：{item['final-equity']}",
+                    f"  收益率：{fmt_p(item['return'] * 100)}",
+                    ""
+                ]
+            )
+
+        yearly_stat_str = "\n".join(yearly_stat_str_list)
+        half_yearly_stat_str_list = []
+        for item in self.half_yearly_return_stat_list:
+            half_yearly_stat_str_list.extend(
+                [
+                    f"  年份：{item['period']}",
+                    f"  期初权益：{item['initial-equity']}",
+                    f"  期末权益：{item['final-equity']}",
+                    f"  收益率：{fmt_p(item['return'] * 100)}",
+                    ""
+                ]
+            )
+
+        half_yearly_stat_str = "\n".join(half_yearly_stat_str_list)
         report = [
             "=" * 60,
             f"             回测交易统计报告 [ 标的: {self.symbol or '未指定'} ]",
@@ -569,6 +649,10 @@ class BacktestingSummary:
             f"  交易开始时间(计算完指标)  :  {self.trading_start_date}",
             f"  交易结束时间(计算完指标)  :  {self.trading_end_date}",
             "",
+            "【自然年收益统计】",
+            yearly_stat_str,
+            "【半个自然年收益统计】",
+            half_yearly_stat_str,
             "=" * 60
         ]
         return "\n".join(report)

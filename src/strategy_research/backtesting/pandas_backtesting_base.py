@@ -117,10 +117,14 @@ class PandasBacktestingBase(ABC):
 
         return daily_equity_df
 
+    def get_period_return_stat(self) -> tuple[list, list]:
+        return self.account.daily_equity_recorder.calc_period_return()
+
     def get_backtesting_summary(self) -> BacktestingSummary:
         backtesting_trade_stat = self.get_trade_statistics()
         daily_equity_statistics_df = self.get_all_daily_equity_as_df()
         max_drawdown = daily_equity_statistics_df["drawdown"].min()
+        yearly_return_stat_list, half_yearly_return_stat_list = self.get_period_return_stat()
 
         backtesting_summary = BacktestingSummary(symbol=self.symbol,
                                                  trade_stats=backtesting_trade_stat,
@@ -128,7 +132,9 @@ class PandasBacktestingBase(ABC):
                                                  bar_start_date=self.bar_start_datetime,
                                                  bar_end_date=self.bar_end_datetime,
                                                  trading_start_date=self.trading_start_datetime,
-                                                 trading_end_date=self.trading_end_datetime, )
+                                                 trading_end_date=self.trading_end_datetime,
+                                                 yearly_return_stat_list=yearly_return_stat_list,
+                                                 half_yearly_return_stat_list=half_yearly_return_stat_list)
 
         return backtesting_summary
 
