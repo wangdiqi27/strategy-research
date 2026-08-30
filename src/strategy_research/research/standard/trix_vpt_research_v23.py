@@ -648,7 +648,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         stop_loss,
                         take_profit,
                         0,
-                        cur_close,
+                        cur_close
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
@@ -793,7 +793,7 @@ class TrixVptResearch(PandasBacktestingBase):
                             cur_trading_date,
                             close_reason,
                             0,
-                            cur_close,
+                            cur_close
                         )
 
                         if is_switch_contract:

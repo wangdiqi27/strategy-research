@@ -1,6 +1,6 @@
 import re
 import traceback
-from datetime import time, date, timedelta
+from datetime import time
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +12,6 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.structure import calc_swing_points, calc_zigzag
 from strategy_research.factor.volume_price import calc_vpt, calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
@@ -187,8 +186,6 @@ class TrixVptResearch(PandasBacktestingBase):
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
 
-        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df, )
-
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
             atr_14=daily_signal_bar_df["atr_14"].shift(1),
@@ -304,26 +301,8 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_pos_days",
             "trix_neg_days",
             "trix_allow_close_long",
-            "trix_allow_close_short",
-
-            # zigzag
-            "zigzag_pivot_type",
-            "zigzag_pivot_price",
-            "zigzag_signal",
-            "zigzag_confirmed_pivot_price",
-            "zigzag_ref_price",
-            "zigzag_structure",
-            "zigzag_structure_confirmed",
-            "zigzag_last_high",
-            "zigzag_last_high_confirmed",
-            "zigzag_last_low",
-            "zigzag_last_low_confirmed",
-            "zigzag_last_high_index",
-            "zigzag_last_high_index_confirmed",
-            "zigzag_last_low_index",
-            "zigzag_last_low_index_confirmed",
+            "trix_allow_close_short"
         ]
-
         strict_columns = [
             # atr
             "atr_14",
@@ -362,7 +341,6 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_allow_close_long",
             "trix_allow_close_short",
         ]
-
         daily_exec_bar_df = daily_exec_bar_df[require_columns]
         daily_exec_bar_df = daily_exec_bar_df.dropna(subset=strict_columns)
         daily_exec_bar_df = daily_exec_bar_df.add_prefix("daily_")
@@ -494,11 +472,6 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_prev_is_kline_long_arr = bar_1m_exec_df["daily_is_kline_long"].to_numpy()
         daily_prev_kline_body_ratio_arr = bar_1m_exec_df["daily_kline_body_ratio"].to_numpy()
 
-        ## swing structure
-        daily_zigzag_structure_confirmed_arr = bar_1m_exec_df["daily_zigzag_structure_confirmed"].to_numpy()
-        daily_zigzag_last_high_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_high_confirmed"].to_numpy()
-        daily_zigzag_last_low_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_low_confirmed"].to_numpy()
-
         # 分钟级指标
 
         ## 价格涨跌情况
@@ -532,7 +505,6 @@ class TrixVptResearch(PandasBacktestingBase):
         }
 
         ## 上一根Bar的交易日期
-        open_memory: dict[date, bool] = {}
         last_trading_date = None
 
         ## 持仓后数据统计
@@ -586,21 +558,12 @@ class TrixVptResearch(PandasBacktestingBase):
 
             if cur_position is None or cur_position.volume == 0:
                 """开仓检查"""
-                has_memory = open_memory.get(cur_trading_date, False)
-                if has_memory:
-                    continue
-
-                if daily_zigzag_structure_confirmed_arr[i] == "":
-                    continue
-
                 open_reason = ""
                 if (
                         cur_is_channel_compression
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open > 0
-                        and not (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                                 and cur_close < daily_zigzag_last_high_confirmed_arr[i])
                 ):
                     """多头开仓"""
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
@@ -622,15 +585,12 @@ class TrixVptResearch(PandasBacktestingBase):
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
-                    open_memory[cur_trading_date] = True
 
                 elif (
                         cur_is_channel_compression
                         and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open < 0
-                        and not (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
-                                 and cur_close > daily_zigzag_last_low_confirmed_arr[i])
                 ):
                     """空头开仓"""
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
@@ -652,7 +612,6 @@ class TrixVptResearch(PandasBacktestingBase):
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
-                    open_memory[cur_trading_date] = True
             else:
                 """平仓检查"""
                 position_symbol = cur_position.symbol
@@ -703,9 +662,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
-                    #     close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
@@ -776,9 +732,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_pos_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
-                    #       and cur_close > daily_zigzag_last_low_confirmed_arr[i]):
-                    #     close_reason = "HH-HL 上升结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
@@ -795,7 +748,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             0,
                             cur_close,
                         )
-
                         if is_switch_contract:
                             switch_contract_symbol, switch_contract_close = self._get_switch_contract_data(
                                 cur_major_contract_symbol,
@@ -883,21 +835,6 @@ class TrixVptResearch(PandasBacktestingBase):
             row=1,
             col=1)
 
-        # zigzag
-        fig.add_trace(
-            go.Scatter(
-                x=datetime_str,
-                y=bar_df['zigzag_pivot_price'],
-                mode='lines',
-                name='ZigZag',
-                line=dict(
-                    color='#00F5FF',  # 蓝色线条
-                    width=3
-                ),
-                connectgaps=True,
-            )
-        )
-
         return fig
 
 
@@ -916,7 +853,7 @@ def test_jq():
     factor_name = "TRIX-VPT"
     bar_period = "1m"
     initial_capital = 100_0000
-    backtesting_allow_trade_direction = BacktestingAllowTradeDirection.LONG
+    backtesting_allow_trade_direction = BacktestingAllowTradeDirection.ALL
     report_factor_dir = Path(f"{report_root_dir}/{factor_name}/{version}/{backtesting_allow_trade_direction.value}")
     report_factor_dir.mkdir(parents=True, exist_ok=True)
     backtesting_overall_stat = BacktestingOverallStatistics(

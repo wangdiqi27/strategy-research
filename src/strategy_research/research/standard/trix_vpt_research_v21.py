@@ -1,6 +1,6 @@
 import re
 import traceback
-from datetime import time, date, timedelta
+from datetime import time, date
 from pathlib import Path
 
 import numpy as np
@@ -703,14 +703,15 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
-                    #     close_reason = "LH-LL 下降结构"
+                    elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
+                          and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
+                        close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
                         close_reason = '移仓换月'
                         is_switch_contract = True
+
 
                     if close_reason:
                         self.close_position(
@@ -776,9 +777,9 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_pos_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
-                    #       and cur_close > daily_zigzag_last_low_confirmed_arr[i]):
-                    #     close_reason = "HH-HL 上升结构"
+                    elif (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
+                          and cur_close > daily_zigzag_last_low_confirmed_arr[i]):
+                        close_reason = "HH-HL 上升结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
