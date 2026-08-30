@@ -1,6 +1,6 @@
 import re
 import traceback
-from datetime import time
+from datetime import time, date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -12,8 +12,10 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix, calc_macd
+from strategy_research.factor.structure import calc_swing_points, calc_zigzag
 from strategy_research.factor.volume_price import calc_vpt, calc_ccl
-from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics
+from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
+    BacktestingAllowTradeDirection
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
 from strategy_research.tool.contract import ContractTool
 from strategy_research.tool.data import KLineTool, BarDataManager
@@ -28,8 +30,11 @@ class TrixVptResearch(PandasBacktestingBase):
                  bar_period: str,
                  report_dir: str,
                  initial_capital: float,
+                 bar_df: DataFrame,
                  enable_fig_daily_mode: bool,
                  enable_debug_mode: bool,
+                 enable_jq_index_mode: bool,
+                 allow_trade_direction: BacktestingAllowTradeDirection,
                  atr_period: int = 14,
                  volume_period: int = 14,
                  volume_threshold: float = 1.5,
@@ -48,8 +53,11 @@ class TrixVptResearch(PandasBacktestingBase):
                          bar_period,
                          report_dir,
                          initial_capital,
+                         bar_df,
                          enable_fig_daily_mode,
-                         enable_debug_mode)
+                         enable_debug_mode,
+                         enable_jq_index_mode,
+                         allow_trade_direction)
         self.atr_period = atr_period
         self.volume_period = volume_period
         self.volume_threshold = volume_threshold
@@ -179,6 +187,8 @@ class TrixVptResearch(PandasBacktestingBase):
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
 
+        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df, )
+
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
             atr_14=daily_signal_bar_df["atr_14"].shift(1),
@@ -294,8 +304,26 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_pos_days",
             "trix_neg_days",
             "trix_allow_close_long",
-            "trix_allow_close_short"
+            "trix_allow_close_short",
+
+            # zigzag
+            "zigzag_pivot_type",
+            "zigzag_pivot_price",
+            "zigzag_signal",
+            "zigzag_confirmed_pivot_price",
+            "zigzag_ref_price",
+            "zigzag_structure",
+            "zigzag_structure_confirmed",
+            "zigzag_last_high",
+            "zigzag_last_high_confirmed",
+            "zigzag_last_low",
+            "zigzag_last_low_confirmed",
+            "zigzag_last_high_index",
+            "zigzag_last_high_index_confirmed",
+            "zigzag_last_low_index",
+            "zigzag_last_low_index_confirmed",
         ]
+
         strict_columns = [
             # atr
             "atr_14",
@@ -334,6 +362,7 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_allow_close_long",
             "trix_allow_close_short",
         ]
+
         daily_exec_bar_df = daily_exec_bar_df[require_columns]
         daily_exec_bar_df = daily_exec_bar_df.dropna(subset=strict_columns)
         daily_exec_bar_df = daily_exec_bar_df.add_prefix("daily_")
@@ -465,6 +494,11 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_prev_is_kline_long_arr = bar_1m_exec_df["daily_is_kline_long"].to_numpy()
         daily_prev_kline_body_ratio_arr = bar_1m_exec_df["daily_kline_body_ratio"].to_numpy()
 
+        ## swing structure
+        daily_zigzag_structure_confirmed_arr = bar_1m_exec_df["daily_zigzag_structure_confirmed"].to_numpy()
+        daily_zigzag_last_high_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_high_confirmed"].to_numpy()
+        daily_zigzag_last_low_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_low_confirmed"].to_numpy()
+
         # 分钟级指标
 
         ## 价格涨跌情况
@@ -498,6 +532,7 @@ class TrixVptResearch(PandasBacktestingBase):
         }
 
         ## 上一根Bar的交易日期
+        open_memory: dict[date, bool] = {}
         last_trading_date = None
 
         ## 持仓后数据统计
@@ -523,7 +558,8 @@ class TrixVptResearch(PandasBacktestingBase):
             self.account.update_latest_price(self.symbol,
                                              cur_close)
 
-            cur_position = self.account.get_position(self.symbol)
+            # cur_position = self.account.get_position(self.symbol)
+            cur_position = self.account.get_position_v2()
             cur_datetime = datetime_arr[i]
             cur_high = minute_high_arr[i]
             cur_low = minute_low_arr[i]
@@ -536,56 +572,91 @@ class TrixVptResearch(PandasBacktestingBase):
             cur_channel_low = daily_channel_low_arr[i]
             cur_daily_atr_14 = daily_atr_14_arr[i]
 
+            if not self._is_in_trading_time(cur_datetime):
+                continue
+
+            cur_major_contract_symbol, cur_major_contract_bar = self._get_major_contract_symbol_and_bar(cur_datetime)
+            if (cur_major_contract_symbol is None
+                    or cur_major_contract_bar is None
+            ):
+                # print(f"cur_datetime: {cur_datetime} , "
+                #       f"cur_major_contract_symbol: {cur_major_contract_symbol}, "
+                #       f"cur_major_contract_bar: {cur_major_contract_bar}")
+                continue
+
             if cur_position is None or cur_position.volume == 0:
                 """开仓检查"""
+                has_memory = open_memory.get(cur_trading_date, False)
+                if has_memory:
+                    continue
+
+                if daily_zigzag_structure_confirmed_arr[i] == "":
+                    continue
+
                 open_reason = ""
                 if (
                         cur_is_channel_compression
                         and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open > 0
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
+                                 and cur_close < daily_zigzag_last_high_confirmed_arr[i])
                 ):
                     """多头开仓"""
+                    if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
+                        continue
+
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                     take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
                     self.open_position(
-                        self.symbol,
-                        cur_close,
+                        cur_major_contract_symbol,
+                        cur_major_contract_bar["close"],
                         BacktestingDirection.LONG,
                         open_reason,
                         cur_datetime,
                         cur_trading_date,
                         stop_loss,
                         take_profit,
-                        0
+                        0,
+                        cur_close,
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
+                    open_memory[cur_trading_date] = True
 
                 elif (
                         cur_is_channel_compression
                         and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                         and cur_intraday_bar_index >= 30
                         and cur_return_today_open < 0
+                        and not (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
+                                 and cur_close > daily_zigzag_last_low_confirmed_arr[i])
                 ):
                     """空头开仓"""
+                    if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
+                        continue
+
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                     take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
                     self.open_position(
-                        self.symbol,
-                        cur_close,
+                        cur_major_contract_symbol,
+                        cur_major_contract_bar["close"],
                         BacktestingDirection.SHORT,
                         open_reason,
                         cur_datetime,
                         cur_trading_date,
                         stop_loss,
                         take_profit,
-                        0
+                        0,
+                        cur_close
                     )
                     after_holding_high_bar_index = i
                     after_holding_low_bar_index = i
+                    open_memory[cur_trading_date] = True
             else:
                 """平仓检查"""
+                position_symbol = cur_position.symbol
+                position_bar_data = self._get_contract_bar(position_symbol, cur_datetime)
                 if cur_high >= minute_high_arr[after_holding_high_bar_index]:
                     after_holding_high_bar_index = i
 
@@ -593,6 +664,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     after_holding_low_bar_index = i
 
                 close_reason = None
+                is_switch_contract = False
                 open_trading_date = cur_position.open_trading_date
                 holding_trading_days = trading_date_to_index.get(cur_trading_date) - trading_date_to_index.get(
                     open_trading_date)
@@ -631,18 +703,43 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
+                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
+                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
+                    #     close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
+                    elif self._need_switch_contract(cur_datetime, cur_position):
+                        close_reason = '移仓换月'
+                        is_switch_contract = True
 
                     if close_reason:
                         self.close_position(
-                            self.symbol,
-                            cur_close,
+                            position_symbol,
+                            position_bar_data['close'],
                             cur_datetime,
                             cur_trading_date,
                             close_reason,
-                            0
+                            0,
+                            cur_close,
                         )
+                        if is_switch_contract:
+                            switch_contract_symbol, switch_contract_close = self._get_switch_contract_data(
+                                cur_major_contract_symbol,
+                                cur_major_contract_bar,
+                                cur_datetime
+                            )
+                            self.open_position(
+                                switch_contract_symbol,
+                                switch_contract_close,
+                                BacktestingDirection.LONG,
+                                "移仓换月",
+                                cur_datetime,
+                                cur_trading_date,
+                                cur_position.stop_loss,
+                                cur_position.take_profit,
+                                0,
+                                cur_close
+                            )
 
                 elif cur_position.direction == BacktestingDirection.SHORT:
                     """空仓平仓检查"""
@@ -679,18 +776,44 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_pos_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
+                    # elif (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
+                    #       and cur_close > daily_zigzag_last_low_confirmed_arr[i]):
+                    #     close_reason = "HH-HL 上升结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
+                    elif self._need_switch_contract(cur_datetime, cur_position):
+                        close_reason = '移仓换月'
+                        is_switch_contract = True
 
                     if close_reason:
                         self.close_position(
-                            self.symbol,
-                            cur_close,
+                            position_symbol,
+                            position_bar_data['close'],
                             cur_datetime,
                             cur_trading_date,
                             close_reason,
-                            0
+                            0,
+                            cur_close
                         )
+
+                        if is_switch_contract:
+                            switch_contract_symbol, switch_contract_close = self._get_switch_contract_data(
+                                cur_major_contract_symbol,
+                                cur_major_contract_bar,
+                                cur_datetime
+                            )
+                            self.open_position(
+                                switch_contract_symbol,
+                                switch_contract_close,
+                                BacktestingDirection.SHORT,
+                                '移仓换月',
+                                cur_datetime,
+                                cur_trading_date,
+                                cur_position.stop_loss,
+                                cur_position.take_profit,
+                                0,
+                                cur_close
+                            )
 
     def create_kline_fig(self) -> go.Figure:
         fig = make_subplots(
@@ -760,73 +883,22 @@ class TrixVptResearch(PandasBacktestingBase):
             row=1,
             col=1)
 
+        # zigzag
+        fig.add_trace(
+            go.Scatter(
+                x=datetime_str,
+                y=bar_df['zigzag_pivot_price'],
+                mode='lines',
+                name='ZigZag',
+                line=dict(
+                    color='#00F5FF',  # 蓝色线条
+                    width=3
+                ),
+                connectgaps=True,
+            )
+        )
+
         return fig
-
-
-def main():
-    pd.set_option('display.max_columns', None)
-    current_file = Path(__file__)
-    filename = current_file.stem
-    pattern = r'_(v\d+(?:\.\d+)*)'
-    match = re.search(pattern, filename)
-    if match:
-        version = match.group(1)
-    else:
-        raise Exception(f"filename does not standardize {filename}")
-
-    report_root_dir = "factor-report"
-    factor_name = "TRIX-VPT"
-    bar_period = "1m"
-    initial_capital = 100_0000
-    report_factor_dir = Path(f"{report_root_dir}/{factor_name}")
-    report_factor_dir.mkdir(parents=True, exist_ok=True)
-    backtesting_overall_stat = BacktestingOverallStatistics(
-        factor_name,
-        report_factor_dir,
-        filename,
-        version
-    )
-    for product in G_BACKTEST_PRODUCT_LIST:
-        report_factor_product_dir = report_factor_dir / product
-        report_factor_product_dir.mkdir(parents=True, exist_ok=True)
-        symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
-        major_contract_df = ContractTool.get_major_contract_by_open_interest(symbol_bar_1d_df)
-        major_contract_list = major_contract_df["symbol"].unique().tolist()
-        major_contract_map = {major_contract: True for major_contract in major_contract_list}
-        for symbol, _ in sorted(major_contract_map.items()):
-            print(f"----------{symbol}----------")
-            # major_contract_start_time = major_contract_df[major_contract_df["symbol"] == symbol]["datetime"].iloc[0]
-            # major_contract_end_time = major_contract_df[major_contract_df["symbol"] == symbol]["datetime"].iloc[-1]
-            # major_contract_adjusted_end_time = (major_contract_end_time - pd.DateOffset(months=1)).replace(day=20)
-            # print(f"{major_contract_start_time} - {major_contract_adjusted_end_time}")
-
-            try:
-                bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
-                if bar_1m_df.empty:
-                    print(f"{symbol}-1m dataframe is empty")
-                    continue
-                # mask = (bar_1m_df['datetime'] >= major_contract_start_time) & (
-                #         bar_1m_df['datetime'] <= major_contract_end_time)
-                # bar_1m_df = bar_1m_df.loc[mask]
-                trix_vpt_research = TrixVptResearch(factor_name,
-                                                    version,
-                                                    symbol,
-                                                    bar_period,
-                                                    str(report_factor_product_dir),
-                                                    initial_capital,
-                                                    True,
-                                                    True)
-                trix_vpt_research.run(bar_1m_df)
-                trix_vpt_research.show_backtesting_summary()
-
-                backtesting_overall_stat.add_backtesting_summary(product,
-                                                                 trix_vpt_research.get_backtesting_summary())
-                backtesting_overall_stat.add_trade_df(product,
-                                                      trix_vpt_research.get_trades_df())
-
-
-            except Exception as e:
-                print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
 
 def test_jq():
@@ -859,8 +931,8 @@ def test_jq():
 
         print(f"----------{symbol}----------")
         try:
-            bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
-            if bar_1m_df.empty:
+            jq_bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
+            if jq_bar_1m_df.empty:
                 print(f"{symbol}-1m dataframe is empty")
                 continue
 
@@ -870,9 +942,12 @@ def test_jq():
                                                 bar_period,
                                                 str(report_factor_product_dir),
                                                 initial_capital,
+                                                jq_bar_1m_df,
                                                 True,
-                                                True)
-            trix_vpt_research.run(bar_1m_df)
+                                                False,
+                                                True,
+                                                BacktestingAllowTradeDirection.ALL, )
+            trix_vpt_research.run()
             trix_vpt_research.show_backtesting_summary()
             backtesting_overall_stat.add_backtesting_summary(product,
                                                              trix_vpt_research.get_backtesting_summary())
@@ -881,96 +956,9 @@ def test_jq():
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
-    # brief_report_file = report_factor_dir / f"brief-summary-data-{version}.txt"
-    # with open(brief_report_file, 'w', encoding='utf-8') as f:
-    #     f.write(f"策略名称: {filename}\n")
-    #     content = '\n'.join(str(d) for d in backtesting_summary_list)
-    #     f.write(content)
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
     backtesting_overall_stat.analyze_trade_to_excel_file()
-
-
-def test():
-    pd.set_option('display.max_columns', None)
-    symbol = "MA609"
-    product = ContractTool.get_product_by_symbol(symbol)
-    contract_config = get_contract_config(product)
-    bar_1d_df = BarDataManager.load_symbol_from_cache(symbol, "1d")
-    bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
-    bar_1m_df = KLineTool.add_column_session_to_bar_df(bar_1m_df, contract_config.trading_session_time)
-    resampled_bar_1d_df = KLineTool.resample_bar_df(bar_1m_df, "1d")
-
-    resampled_bar_1d_df['datetime'] = pd.to_datetime(resampled_bar_1d_df['datetime']).dt.normalize()
-    bar_1d_df['datetime'] = pd.to_datetime(bar_1d_df['datetime']).dt.normalize()
-
-    columns = ["datetime", "open", "high", "low", "close", "volume", "open_interest", "turnover"]
-    resampled_bar_1d_df = resampled_bar_1d_df[columns]
-    bar_1d_df = bar_1d_df[columns]
-
-    merged_df = pd.merge(
-        resampled_bar_1d_df, bar_1d_df,
-        on='datetime',
-        suffixes=('_resample', '_raw'),
-        how='outer'  # 只取两边都有的日期
-    )
-    print(merged_df)
-
-    merged_df["open_diff"] = merged_df["open_resample"] - merged_df["open_raw"]
-    merged_df["high_diff"] = merged_df["high_resample"] - merged_df["high_raw"]
-    merged_df["low_diff"] = merged_df["low_resample"] - merged_df["low_raw"]
-    merged_df["close_diff"] = merged_df["close_resample"] - merged_df["close_raw"]
-    merged_df["volume_diff"] = merged_df["volume_resample"] - merged_df["volume_raw"]
-    merged_df["open_interest_diff"] = merged_df["open_resample"] - merged_df["open_raw"]
-    merged_df["turnover_diff"] = merged_df["turnover_resample"] - merged_df["turnover_raw"]
-
-    merged_df.to_csv("resample-diff.csv", index=False)
-
-
-def test2():
-    pd.set_option('display.max_columns', None)
-    current_file = Path(__file__)
-    filename = current_file.stem
-    pattern = r'_(v\d+(?:\.\d+)*)'
-    match = re.search(pattern, filename)
-    if match:
-        version = match.group(1)
-    else:
-        raise Exception(f"filename does not standardize {filename}")
-
-    report_root_dir = "factor-report"
-    factor_name = "TRIX-VPT"
-    bar_period = "1m"
-    symbol = "FG505"
-    product = "FG"
-    report_factor_dir = Path(f"{report_root_dir}/{factor_name}/{product}")
-    report_factor_dir.mkdir(parents=True, exist_ok=True)
-    backtesting_overall_stat = BacktestingOverallStatistics(
-        factor_name,
-        report_factor_dir,
-        filename,
-        version
-    )
-    print(f"----------{symbol}----------")
-    try:
-        bar_1m_df = BarDataManager.load_symbol_from_cache(symbol, "1m")
-        trix_vpt_research = TrixVptResearch(factor_name,
-                                            version,
-                                            symbol,
-                                            bar_period,
-                                            str(report_factor_dir),
-                                            100_0000,
-                                            True,
-                                            True)
-        trix_vpt_research.run(bar_1m_df)
-        trix_vpt_research.show_backtesting_summary()
-        backtesting_overall_stat.add_backtesting_summary(product,
-                                                         trix_vpt_research.get_backtesting_summary())
-        backtesting_overall_stat.add_trade_df(product,
-                                              trix_vpt_research.get_trades_df())
-
-    except Exception:
-        print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
 
 
 if __name__ == '__main__':

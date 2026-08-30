@@ -9,6 +9,12 @@ import pandas as pd
 import xlsxwriter
 from pandas import DataFrame
 
+from strategy_research.tool.contract import ContractTool
+
+class BacktestingAllowTradeDirection(Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    ALL = "ALL"
 
 class BacktestingDirection(Enum):
     LONG = "LONG"
@@ -37,7 +43,7 @@ class BacktestingDailyEquityRecorder:
             daily_equity: BacktestingDailyEquity):
         self.daily_equity_list.append(daily_equity)
 
-    def calc_period_return(self,) -> tuple[list, list]:
+    def calc_period_return(self, ) -> tuple[list, list]:
         df = self.get_all_daily_equity_as_df()
         first_date = df['trading_date'].iloc[0]
         virtual_date = first_date - pd.Timedelta(days=1)
@@ -84,7 +90,6 @@ class BacktestingDailyEquityRecorder:
                 'final-equity': last_eq,
                 'return': ret,
             })
-
 
         return yearly_data, half_data
 
@@ -190,6 +195,8 @@ class BacktestingTrade:
     gross_profit: float
     take_profit: float = 0
     stop_loss: float = 0
+    open_index_price: float = 0
+    close_index_price: float = 0
 
 
 class BacktestingTradeRecorder:
@@ -273,7 +280,7 @@ class BacktestingTradeRecorder:
         short_profit_loss_ratio = avg_short_win / avg_short_loss if avg_short_loss > 0 else float('inf')
 
         return BacktestingTradeStatistics(
-            symbol=trades[0].symbol,
+            symbol=self.symbol,
             initial_capital=self.initial_capital,
             total_trades=total_trades,
             win_count=total_win_num,
@@ -314,7 +321,8 @@ class BacktestingPosition:
                  open_trading_date: date,
                  open_commission: float,
                  stop_loss: float = 0,
-                 take_profit: float = 0, ):
+                 take_profit: float = 0,
+                 open_index_price: float = 0, ):
         self.symbol: str = symbol
         self.contract_multiplier: float = contract_multiplier
         self.price_tick: float = price_tick
@@ -330,6 +338,7 @@ class BacktestingPosition:
         self.open_commission: float = open_commission
         self.stop_loss: float = stop_loss
         self.take_profit: float = take_profit
+        self.open_index_price: float = open_index_price
 
     @property
     def position_value(self):
@@ -435,6 +444,7 @@ class BacktestingAccount:
                       slippage: float = 1,
                       margin_rate: float = 1,
                       commission_rate: float = 0,
+                      index_price: float = 0.0,
                       ):
         position = self.get_position(symbol, )
         if position is not None:
@@ -478,7 +488,8 @@ class BacktestingAccount:
                                                      open_trading_date,
                                                      commission,
                                                      stop_loss,
-                                                     take_profit, )
+                                                     take_profit,
+                                                     index_price)
 
     def close_position(self,
                        symbol: str,
@@ -487,7 +498,8 @@ class BacktestingAccount:
                        close_trading_date: date,
                        reason: str,
                        volume: float = 0,
-                       slippage: float = 1, ):
+                       slippage: float = 1,
+                       index_price: float = 0.0, ):
         position = self.get_position(symbol, )
         if position is None:
             print(f"can't find position, symbol: {symbol}")
@@ -540,12 +552,20 @@ class BacktestingAccount:
             gross_profit=realized_pnl,
             stop_loss=position.stop_loss,
             take_profit=position.take_profit,
+            open_index_price=position.open_index_price,
+            close_index_price=index_price,
         ))
 
         self.positions.pop(symbol, None)
 
-    def get_position(self, symbol: str) -> BacktestingPosition:
+    def get_position(self, symbol: str) -> BacktestingPosition | None:
         return self.positions.get(symbol, None)
+
+    def get_position_v2(self) -> BacktestingPosition | None:
+        if len(self.positions) == 0:
+            return None
+
+        return next(iter(self.positions.values()))
 
     def update_latest_price(self,
                             symbol: str,
@@ -699,6 +719,7 @@ class BacktestingOverallStatistics:
         if trade_df_list:
             for trade_df in trade_df_list:
                 symbol = trade_df["symbol"].iloc[0]
+                product_sheet_name = ContractTool.get_product_by_symbol(symbol)
                 columns = [
                     "symbol",
                     "direction",
@@ -718,9 +739,9 @@ class BacktestingOverallStatistics:
                 filter_trade_df['open_time'] = filter_trade_df['open_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
                 filter_trade_df['close_time'] = filter_trade_df['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
                 filter_trade_df.to_excel(writer,
-                                         sheet_name=symbol,
+                                         sheet_name=product_sheet_name,
                                          engine='xlsxwriter', )
-                worksheet = writer.sheets[symbol]
+                worksheet = writer.sheets[product_sheet_name]
                 worksheet.autofit()
 
         writer.close()

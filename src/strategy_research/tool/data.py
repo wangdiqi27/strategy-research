@@ -173,9 +173,34 @@ class BarDataManager:
         try:
             cache_file = cache_dir / f"{symbol}.csv"
             bar_df = pd.read_csv(cache_file, parse_dates=["datetime"])
+            if bar_df.empty:
+                return pd.DataFrame()
+
+            n_days = bar_df["datetime"].dt.normalize().nunique()
+            if n_days <= 60:
+                return pd.DataFrame()
+
+            symbol = bar_df["symbol"].iloc[0]
+            exchange = bar_df["exchange"].iloc[0]
+            part_1, part_2 = ContractTool.get_parts_by_symbol(symbol)
+            if part_2 != "JQ00":
+                if exchange == "Exchange.CZCE":
+                    year = int(f"202{part_2[0:1]}")
+                    month = int(part_2[1:])
+                else:
+                    year = int(f"20{part_2[0:2]}")
+                    month = int(part_2[2:])
+
+                delivery_year_month_flag = datetime(year, month, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+                last_trading_day = bar_df.loc[bar_df["datetime"] < delivery_year_month_flag, 'datetime'].iloc[-1]
+                bar_df["last_trading_day"] = last_trading_day
+            else:
+                last_trading_day = bar_df['datetime'].iloc[-1]
+                bar_df["last_trading_day"] = last_trading_day
+
             return bar_df
         except Exception as e:
-            print(f"{symbol}-{period} csv file can't find, exception: {e}")
+            print(f"period: {period}, {symbol}.csv file can't find, exception: {e}")
             return pd.DataFrame()
 
     @classmethod
@@ -215,6 +240,8 @@ class BarDataManager:
         files = Path(cache_dir).glob(f"{product}*.csv")
 
         symbol_list = [f.stem for f in files]
+
+        symbol_list = [symbol for symbol in symbol_list if symbol != f"{product}JQ00"]
 
         return symbol_list
 
@@ -314,6 +341,29 @@ class BarDataManager:
         ]
 
         return df[selected_cols]
+
+    @classmethod
+    def load_product_top_n_major_from_cache(cls,
+                                            product: str) -> tuple[DataFrame, dict[str, DataFrame]]:
+        symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
+        top_n_major_contract_df = ContractTool.get_top_n_contract_by_open_interest(symbol_bar_1d_df)
+        top_n_major_contract_df = top_n_major_contract_df.dropna()
+        top_1_symbol_list = top_n_major_contract_df["rank1_symbol"].unique().tolist()
+        top_2_symbol_list = top_n_major_contract_df["rank2_symbol"].unique().tolist()
+        # top_3_symbol_list = top_n_major_contract_df["rank3_symbol"].unique().tolist()
+
+        # major_symbol_list = list(set(top_1_symbol_list) | set(top_2_symbol_list) | set(top_3_symbol_list))
+        major_symbol_list = list(set(top_1_symbol_list) | set(top_2_symbol_list))
+        symbol_top_n_major_bar_1m_df_dict: dict[str, DataFrame] = {}
+        for symbol in major_symbol_list:
+            bar_1m_df = cls.load_symbol_from_cache(symbol, "1m")
+            if bar_1m_df.empty:
+                print(f"{symbol} dataframe is empty")
+                continue
+
+            symbol_top_n_major_bar_1m_df_dict[symbol] = bar_1m_df
+
+        return top_n_major_contract_df, symbol_top_n_major_bar_1m_df_dict
 
 
 class KLineTool:
@@ -448,6 +498,7 @@ class KLineTool:
             'interval': 'first',
             'session_type': 'first',
             'session_date': 'first',
+            'last_trading_day': 'last',
         }
         group_keys = ['trading_date', 'group_idx']
         resampled = df.groupby(group_keys, as_index=False).agg(agg_dict)

@@ -444,7 +444,7 @@ def main():
             factor_name,
             str(report_factor_product_dir),
         )
-        major_contract_df = ContractTool.arrange_major_contract(symbol_bar_1d_df)
+        major_contract_df = ContractTool.get_major_contract_by_open_interest(symbol_bar_1d_df)
         major_contract_list = major_contract_df["symbol"].unique().tolist()
         major_contract_map = {major_contract: True for major_contract in major_contract_list}
         for symbol, _ in sorted(major_contract_map.items()):

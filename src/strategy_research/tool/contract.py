@@ -6,6 +6,7 @@ from vnpy.trader.constant import Exchange
 
 from strategy_research.config.exchange import get_contract_config
 
+
 class ContractTool:
     @staticmethod
     def get_exchange_by_product(product: str) -> Exchange:
@@ -71,7 +72,7 @@ class ContractTool:
         return suffixes
 
     @staticmethod
-    def arrange_major_contract(symbol_bar_1d_df: dict[str, DataFrame]) -> DataFrame:
+    def get_major_contract_by_open_interest(symbol_bar_1d_df: dict[str, DataFrame]) -> DataFrame:
         all_dfs = []
         for symbol, df in symbol_bar_1d_df.items():
             df_copy = df.copy()
@@ -82,3 +83,89 @@ class ContractTool:
         major_contract_df = merged_df.loc[idx].sort_values("datetime").reset_index(drop=True)
 
         return major_contract_df
+
+    @staticmethod
+    def get_top_n_contract_by_open_interest(symbol_bar_1d_df: dict[str, DataFrame]) -> DataFrame:
+        records = []
+
+        for symbol, df in symbol_bar_1d_df.items():
+            if df.empty:
+                continue
+
+            data = df[["datetime", "symbol", "open_interest"]].copy()
+            records.append(data)
+
+        if not records:
+            return DataFrame(
+                columns=[
+                    "datetime",
+                    "rank1_symbol", "rank1_oi",
+                    "rank2_symbol", "rank2_oi",
+                    "rank3_symbol", "rank3_oi",
+                ]
+            )
+
+        # 合并所有合约
+        all_df = pd.concat(records, ignore_index=True)
+
+        # 同一天按照持仓量从大到小排序
+        all_df = all_df.sort_values(
+            ["datetime", "open_interest"],
+            ascending=[True, False],
+        )
+
+        # 每天取前三名
+        top3 = all_df.groupby("datetime", sort=True).head(3)
+
+        # 添加排名
+        top3["rank"] = (
+                top3.groupby("datetime").cumcount() + 1
+        )
+
+        # 转成宽表
+        result = top3.pivot(
+            index="datetime",
+            columns="rank",
+            values=["symbol", "open_interest"],
+        )
+
+        # 调整列名
+        result.columns = [
+            f"rank{rank}_{'symbol' if field == 'symbol' else 'oi'}"
+            for field, rank in result.columns
+        ]
+
+        result = result.reset_index()
+
+        # 保证列顺序
+        result = result[
+            [
+                "datetime",
+                "rank1_symbol", "rank1_oi",
+                "rank2_symbol", "rank2_oi",
+                "rank3_symbol", "rank3_oi",
+            ]
+        ]
+
+        return result
+
+    @staticmethod
+    def get_parts_by_symbol(symbol: str) -> tuple[str | None, str | None]:
+        contract = symbol.split('.')[0]
+
+        # 规则1：加权指数 — 品种 + JQ00
+        m = re.match(r'^([a-zA-Z]+)JQ00$', contract)
+        if m:
+            return m.group(1), "JQ00"
+
+        # # 规则2: 套利合约 — 品种+数字-品种+数字
+        # m = re.match(r'^([a-zA-Z]+)\d+-([a-zA-Z]+)\d+$', contract)
+        # if m:
+        #     return m.group(1)
+
+        # 规则3: 普通合约 — 品种 + 数字
+        m = re.match(r'^([a-zA-Z]+)(\d+)$', contract)
+        if m:
+            return m.group(1), m.group(2)
+
+        return None, None

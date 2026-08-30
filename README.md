@@ -407,7 +407,7 @@ ag 变化不大
 看起来更合理。
 
 
-# trix_vpt_research_v18
+# trix_vpt_research_v18(废弃)
 
 v18 版本，基于 v15
 
@@ -418,7 +418,7 @@ v18 版本，基于 v15
 
 
 
-# trix_vpt_research_v19
+# trix_vpt_research_v19(废弃)
 
 v19 版本，基于 v17
 
@@ -426,6 +426,18 @@ v19 版本，基于 v17
 
 ## 结论
 
+
+# trix_vpt_research_v20
+
+v20 版本，基于 v9
+
+# trix_vpt_research_v21
+
+v21 版本，基于 v15
+
+# trix_vpt_research_v22
+
+v22 版本，基于 v17
 
 
 # TODO

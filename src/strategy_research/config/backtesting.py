@@ -9,11 +9,11 @@ G_BACKTEST_SYMBOL_LIST: list[str] = [
 ]
 
 G_BACKTEST_PRODUCT_LIST: list[str] = [
-    'FG',
-    'lc',
-    'ag',
+    # 'FG',
+    # 'lc',
+    # 'ag',
     'jd',
-    'MA',
+    # 'MA',
     # 'ps',
     # 'rb',
     # 'jm',

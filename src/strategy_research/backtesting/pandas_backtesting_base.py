@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from datetime import time, datetime, date
+from datetime import time, datetime, date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -9,9 +9,10 @@ from plotly.io import to_html
 from plotly.subplots import make_subplots
 
 from strategy_research.backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, \
-    BacktestingPosition, BacktestingSummary
+    BacktestingPosition, BacktestingSummary, BacktestingAllowTradeDirection
 from strategy_research.config.exchange import get_contract_config
 from strategy_research.tool.contract import ContractTool
+from strategy_research.tool.data import BarDataManager
 
 
 class PandasBacktestingBase(ABC):
@@ -23,8 +24,12 @@ class PandasBacktestingBase(ABC):
                  bar_period: str,
                  report_dir: str,
                  initial_capital: float,
+                 bar_df: DataFrame,
                  enable_fig_daily_mode: bool = False,
-                 enable_debug_mode: bool = False):
+                 enable_debug_mode: bool = False,
+                 enable_jq_index_mode: bool = False,
+                 allow_trade_direction: BacktestingAllowTradeDirection = BacktestingAllowTradeDirection.ALL,
+                 ):
         self.factor_name = factor_name
         self.version = version
         self.symbol = symbol
@@ -32,9 +37,12 @@ class PandasBacktestingBase(ABC):
         self.report_dir = report_dir
         self.initial_capital = initial_capital
         self.capital = initial_capital
+        self.bar_df = bar_df
         self.datetime_formater = '%Y%m%d %H:%M'
         self.enable_fig_daily_mode = enable_fig_daily_mode
         self.enable_debug_mode = enable_debug_mode
+        self.enable_jq_index_mode = enable_jq_index_mode
+        self.allow_trade_direction = allow_trade_direction
 
         self.bar_start_datetime: datetime | None = None
         self.bar_end_datetime: datetime | None = None
@@ -52,18 +60,156 @@ class PandasBacktestingBase(ABC):
         self._signal_bar_df: DataFrame = pd.DataFrame()
         self._exec_bar_df: DataFrame = pd.DataFrame()
 
+        self._date_top_n_major_bar_data_1d_dict: dict[date, dict] = {}
+        self._symbol_bar_data_1m_dict: dict[str, dict[datetime, dict]] = {}
+        self._symbol_list: list[str] = []
+        self._symbol_index_dict: dict[str, int] = {}
+
         self.account: BacktestingAccount = BacktestingAccount(self.initial_capital,
                                                               self.symbol)
 
-    @property
-    def signal_bar_df(self):
-        return self._signal_bar_df
+    def _get_major_contract_symbol(self,
+                                   bar_datetime: datetime) -> str | None:
+        top_n_major_contract = self._date_top_n_major_bar_data_1d_dict.get(bar_datetime.date(), None)
+        if top_n_major_contract is None:
+            return None
 
-    @property
-    def exec_bar_df(self):
-        return self._exec_bar_df
+        return top_n_major_contract["rank1_symbol"]
 
-    def run(self, bar_df: DataFrame):
+    def _get_secondary_major_contract_symbol(self,
+                                             bar_datetime: datetime) -> str | None:
+        top_n_major_contract = self._date_top_n_major_bar_data_1d_dict.get(bar_datetime.date(), None)
+        if top_n_major_contract is None:
+            return None
+
+        return top_n_major_contract["rank2_symbol"]
+
+    def _get_major_contract_symbol_and_bar(self,
+                                           bar_datetime: datetime) -> tuple[str | None, dict | None]:
+        major_symbol = self._get_major_contract_symbol(bar_datetime)
+        if major_symbol is None:
+            return None, None
+
+        major_bar_data = self._get_contract_bar(major_symbol, bar_datetime)
+
+        return major_symbol, major_bar_data
+
+    def _get_secondary_major_contract_symbol_and_bar(self,
+                                                     bar_datetime: datetime) -> tuple[str | None, dict | None]:
+        secondary_major_symbol = self._get_secondary_major_contract_symbol(bar_datetime)
+        if secondary_major_symbol is None:
+            return None, None
+
+        secondary_major_bar_data = self._get_contract_bar(secondary_major_symbol, bar_datetime)
+
+        return secondary_major_symbol, secondary_major_bar_data
+
+    def _get_contract_bar(self,
+                          symbol: str,
+                          bar_datetime: datetime) -> dict | None:
+        datetime_bar_data_1m_dict = self._symbol_bar_data_1m_dict[symbol]
+        bar_data = datetime_bar_data_1m_dict.get(bar_datetime, None)
+        if bar_data is None:
+            return None
+
+        return bar_data
+
+    def _get_last_trading_day_by_symbol(self,
+                                        symbol: str) -> datetime:
+        datetime_bar_data_1m_dict = self._symbol_bar_data_1m_dict[symbol]
+        last_trading_day = next(iter(datetime_bar_data_1m_dict.values()))["last_trading_day"]
+
+        return last_trading_day
+
+    def _process_major_contract(self):
+        top_n_major_contract_df, symbol_top_n_major_bar_1m_df_dict = BarDataManager.load_product_top_n_major_from_cache(
+            self.product, )
+        top_n_major_contract_df["date"] = pd.to_datetime(top_n_major_contract_df["datetime"]).dt.date
+        top_n_major_contract_df = top_n_major_contract_df.drop(columns=['datetime'])
+        date_top_n_major_contract_dict = top_n_major_contract_df.set_index('date').to_dict('index')
+        self._date_top_n_major_bar_data_1d_dict = date_top_n_major_contract_dict
+
+        major_symbol_list = sorted(symbol_top_n_major_bar_1m_df_dict.keys())
+        symbol_index_dict = {}
+        for i in range(len(major_symbol_list)):
+            symbol_index_dict[major_symbol_list[i]] = i
+
+        self._symbol_list = major_symbol_list
+        self._symbol_index_dict = symbol_index_dict
+
+        for symbol in symbol_top_n_major_bar_1m_df_dict:
+            df = symbol_top_n_major_bar_1m_df_dict[symbol]
+            datetime_bar_data_dict = df.set_index('datetime').to_dict('index')
+            self._symbol_bar_data_1m_dict[symbol] = datetime_bar_data_dict
+
+    def _is_in_trading_time(self,
+                            bar_datetime: datetime) -> bool:
+        trading_session_time_list = self.contract_config.trading_session_time
+        bar_time = bar_datetime.time()
+        for session_time in trading_session_time_list:
+            if session_time[0] <= bar_time <= session_time[1]:
+                return True
+
+        return False
+
+    def _need_switch_contract(self,
+                              bar_datetime: datetime,
+                              position: BacktestingPosition) -> bool:
+        # 移仓换月
+        position_volume = position.volume
+        position_symbol = position.symbol
+        position_bar_data = self._get_contract_bar(position_symbol, bar_datetime)
+        position_last_trading_day = position_bar_data['last_trading_day']
+        position_oi = position_bar_data["open_interest"]
+        major_symbol = self._get_major_contract_symbol(bar_datetime)
+        major_bar_data = self._get_contract_bar(major_symbol, bar_datetime)
+        major_last_trading_day = major_bar_data['last_trading_day']
+        secondary_major_symbol = self._get_secondary_major_contract_symbol(bar_datetime)
+        if (major_symbol != position_symbol
+                and major_last_trading_day > position_last_trading_day
+                and ((position_last_trading_day - bar_datetime) < timedelta(days=20) or (
+                        (position_volume / position_oi) >= (1 / 1000)))):
+            # 主力合约不是持仓合约，且离最后可交易日小于等于15天，或者仓位/持仓量 > 万分之一，需要移仓换月
+            print(f"bar_datetime: {bar_datetime}, "
+                  f"position_symbol: {position_symbol}, "
+                  f"major_symbol: {major_symbol}, "
+                  f"secondary_major_symbol: {secondary_major_symbol},"
+                  f"less than 20: {(position_last_trading_day - bar_datetime) < timedelta(days=20)},"
+                  f"great than 1/10000: {(position_volume / position_oi) >= (1 / 1000)}, "
+                  f"need switch_contract")
+            return True
+
+        return False
+
+    def _get_switch_contract_data(self,
+                                  candidate_switch_contract_symbol: str,
+                                  candidate_switch_contract_bar: dict,
+                                  cur_datetime: datetime,
+                                  delta_days: int = 60) -> tuple[str, float]:
+        switch_contract_symbol = candidate_switch_contract_symbol
+        switch_contract_close = candidate_switch_contract_bar["close"]
+        if (candidate_switch_contract_bar["last_trading_day"] - cur_datetime) < timedelta(days=delta_days):
+            symbol_index = self._symbol_index_dict[candidate_switch_contract_symbol]
+            symbol_index += 1
+            if symbol_index != len(self._symbol_list):
+                switch_contract_symbol = self._symbol_list[symbol_index + 1]
+                switch_contract_bar = self._get_contract_bar(switch_contract_symbol, cur_datetime)
+                switch_contract_close = switch_contract_bar["close"]
+
+                print(f"candidate_contract_symbol: {candidate_switch_contract_symbol}, "
+                      f"candidate_switch_contract_bar.last_trading_day: {candidate_switch_contract_bar["last_trading_day"]}, "
+                      f"cur_datetime: {cur_datetime}, "
+                      f"switch_contract_symbol: {switch_contract_symbol}, ")
+
+        return switch_contract_symbol, switch_contract_close
+
+    def run(self):
+        if self.enable_jq_index_mode:
+            print(f"{'-' * 10} start loading major contract {'-' * 10}")
+            self._process_major_contract()
+            print(f"{'-' * 10} stop loading major contract {'-' * 10}")
+
+        bar_df = self.bar_df
         print(f"{'-' * 10} start computing indicators {'-' * 10}")
         exec_bar_df, signal_bar_df = self.compute_indicators(bar_df, self.contract_config.trading_session_time)
         self.trading_start_datetime = exec_bar_df['trading_date'].iloc[0]
@@ -142,7 +288,6 @@ class PandasBacktestingBase(ABC):
         backtesting_summary = self.get_backtesting_summary()
 
         print(backtesting_summary)
-
 
     @abstractmethod
     def create_kline_fig(self) -> go.Figure:
@@ -302,6 +447,13 @@ class PandasBacktestingBase(ABC):
             close_x_axis_field = "close_time"
             bar_x_axis_field = "datetime"
 
+        if self.enable_jq_index_mode:
+            open_price_field = "open_index_price"
+            close_price_field = "close_index_price"
+        else:
+            open_price_field = "open_price"
+            close_price_field = "close_price"
+
         """ 
         绘制开仓点，在K线上添加黑点，悬浮显示文字
         """
@@ -313,13 +465,14 @@ class PandasBacktestingBase(ABC):
             "open_price",
             "take_profit",
             "stop_loss",
+            "open_index_price",
         ]
         open_points_df = trades_df[open_columns]
         entry_times_str = open_points_df[open_x_axis_field].dt.strftime(self.datetime_formater)
         fig.add_trace(
             go.Scatter(
                 x=entry_times_str,
-                y=open_points_df['open_price'],
+                y=open_points_df[open_price_field],
                 mode='markers',
                 name='开仓点',
                 marker=dict(
@@ -381,7 +534,7 @@ class PandasBacktestingBase(ABC):
         fig.add_trace(
             go.Scatter(
                 x=exit_times_str,
-                y=trades_df['close_price'],
+                y=trades_df[close_price_field],
                 mode='markers',
                 name='平仓点',
                 marker=dict(
@@ -609,7 +762,8 @@ class PandasBacktestingBase(ABC):
                       open_trading_date: date,
                       stop_loss: float = 0,
                       take_profit: float = 0,
-                      volume: float = 0, ):
+                      volume: float = 0,
+                      index_price: float = 0):
         self.account.open_position(
             symbol,
             self.price_tick,
@@ -625,6 +779,7 @@ class PandasBacktestingBase(ABC):
             self.slippage,
             self.margin_rate,
             self.commission_rate,
+            index_price,
         )
 
     def close_position(self,
@@ -633,7 +788,8 @@ class PandasBacktestingBase(ABC):
                        close_time: datetime,
                        close_trading_date: date,
                        reason: str,
-                       volume: float = 0, ):
+                       volume: float = 0,
+                       index_price: float = 0):
         self.account.close_position(
             symbol,
             price,
@@ -641,7 +797,8 @@ class PandasBacktestingBase(ABC):
             close_trading_date,
             reason,
             volume,
-            self.slippage
+            self.slippage,
+            index_price,
         )
 
     def get_position(self, symbol) -> BacktestingPosition | None:
