@@ -129,6 +129,7 @@ class BacktestingTradeStatistics:
     short_win_rate: float = 0.0
     long_profit_loss_ratio: float = 0.0
     short_profit_loss_ratio: float = 0.0
+    total_relative_profit_pct: float = 0.0
 
     total_net_profit_pct: float = field(init=False)
     max_consecutive_loss_pct: float = field(init=False)
@@ -153,10 +154,11 @@ class BacktestingTradeStatistics:
             f"  累计净利润 (Net Profit)    :  {fmt_m(self.total_net_profit)} 元 ({fmt_p(self.total_net_profit_pct * 100)})",
             "",
             "【交易次数与胜率】",
-            f"  总交易次数 (Total Trades)  :  {self.total_trades} 次",
-            f"  盈利交易数 (Win Count)     :  {self.win_count} 次",
-            f"  亏损交易数 (Loss Count)    :  {self.loss_count} 次",
-            f"  交易胜率 (Win Rate)        :  {fmt_p(self.win_rate * 100)}",
+            f"  总交易次数 (Total Trades)    :  {self.total_trades} 次",
+            f"  盈利交易数 (Win Count)       :  {self.win_count} 次",
+            f"  亏损交易数 (Loss Count)      :  {self.loss_count} 次",
+            f"  交易胜率 (Win Rate)          :  {fmt_p(self.win_rate * 100)}",
+            f"  相对盈利率 (Relative Profit) :  {fmt_p(self.total_relative_profit_pct * 100)}",
             "",
             "【盈亏与风险指标】",
             f"  盈亏比 (P&L Ratio)         :  {self.profit_loss_ratio:.2f}",
@@ -197,6 +199,14 @@ class BacktestingTrade:
     stop_loss: float = 0
     open_index_price: float = 0
     close_index_price: float = 0
+
+    relative_profit_pct: float = field(init=False)
+
+    def __post_init__(self):
+        if self.direction == BacktestingDirection.LONG:
+            self.relative_profit_pct = (self.close_price - self.open_price) / self.open_price
+        else:
+            self.relative_profit_pct = (self.open_price - self.close_price) / self.open_price
 
 
 class BacktestingTradeRecorder:
@@ -240,6 +250,7 @@ class BacktestingTradeRecorder:
         cur_consecutive_loss_count = 0
         cur_consecutive_loss = 0
 
+        total_relative_profit_pct = 0.0
         for trade in trades:
             if trade.net_profit < 0:
                 cur_consecutive_loss_count += 1
@@ -250,6 +261,7 @@ class BacktestingTradeRecorder:
 
             max_consecutive_loss_count = max(max_consecutive_loss_count, cur_consecutive_loss_count)
             max_consecutive_loss = max(max_consecutive_loss, cur_consecutive_loss)
+            total_relative_profit_pct += trade.relative_profit_pct
 
         # 单独统计做多和做空情况
 
@@ -298,6 +310,7 @@ class BacktestingTradeRecorder:
             short_win_rate=short_win_rate,
             long_profit_loss_ratio=long_profit_loss_ratio,
             short_profit_loss_ratio=short_profit_loss_ratio,
+            total_relative_profit_pct=total_relative_profit_pct,
         )
 
     def show_statistics(self):

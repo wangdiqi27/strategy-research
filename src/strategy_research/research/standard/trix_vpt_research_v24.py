@@ -186,9 +186,6 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df['trix_pos_days'] = is_trix_hist_pos.groupby(pos_group).cumsum()
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
-
-        daily_signal_bar_df = calc_zigzag(daily_signal_bar_df, )
-
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
             atr_14=daily_signal_bar_df["atr_14"].shift(1),
@@ -305,23 +302,6 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_neg_days",
             "trix_allow_close_long",
             "trix_allow_close_short",
-
-            # zigzag
-            "zigzag_pivot_type",
-            "zigzag_pivot_price",
-            "zigzag_signal",
-            "zigzag_confirmed_pivot_price",
-            "zigzag_ref_price",
-            "zigzag_structure",
-            "zigzag_structure_confirmed",
-            "zigzag_last_high",
-            "zigzag_last_high_confirmed",
-            "zigzag_last_low",
-            "zigzag_last_low_confirmed",
-            "zigzag_last_high_index",
-            "zigzag_last_high_index_confirmed",
-            "zigzag_last_low_index",
-            "zigzag_last_low_index_confirmed",
         ]
 
         strict_columns = [
@@ -496,10 +476,10 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_prev_is_kline_long_arr = bar_1m_exec_df["daily_is_kline_long"].to_numpy()
         daily_prev_kline_body_ratio_arr = bar_1m_exec_df["daily_kline_body_ratio"].to_numpy()
 
-        ## swing structure
-        daily_zigzag_structure_confirmed_arr = bar_1m_exec_df["daily_zigzag_structure_confirmed"].to_numpy()
-        daily_zigzag_last_high_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_high_confirmed"].to_numpy()
-        daily_zigzag_last_low_confirmed_arr = bar_1m_exec_df["daily_zigzag_last_low_confirmed"].to_numpy()
+        ## ema
+        daily_ema5_arr = bar_1m_exec_df["daily_ema_5"].to_numpy()
+        daily_ema10_arr = bar_1m_exec_df["daily_ema_10"].to_numpy()
+        daily_ema20_arr = bar_1m_exec_df["daily_ema_20"].to_numpy()
 
         # 分钟级指标
 
@@ -577,9 +557,6 @@ class TrixVptResearch(PandasBacktestingBase):
             if not self._is_in_trading_time(cur_datetime):
                 continue
 
-            if daily_zigzag_structure_confirmed_arr[i] == "":
-                continue
-
             cur_major_contract_symbol, cur_major_contract_bar = self._get_major_contract_symbol_and_bar(cur_datetime)
             if (cur_major_contract_symbol is None
                     or cur_major_contract_bar is None
@@ -594,16 +571,14 @@ class TrixVptResearch(PandasBacktestingBase):
                     and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open > 0
-                    and not (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                             and cur_close < daily_zigzag_last_high_confirmed_arr[i])
+                    and (daily_ema5_arr[i] > daily_ema10_arr[i] > daily_ema20_arr[i])
             )
             can_open_short_condition = (
                     cur_is_channel_compression
                     and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open < 0
-                    and not (daily_zigzag_structure_confirmed_arr[i] == "HH-HL"
-                             and cur_close > daily_zigzag_last_low_confirmed_arr[i])
+                    and (daily_ema5_arr[i] < daily_ema10_arr[i] < daily_ema20_arr[i])
             )
 
             if cur_position is None or cur_position.volume == 0:
@@ -940,21 +915,6 @@ class TrixVptResearch(PandasBacktestingBase):
             row=1,
             col=1)
 
-        # zigzag
-        fig.add_trace(
-            go.Scatter(
-                x=datetime_str,
-                y=bar_df['zigzag_pivot_price'],
-                mode='lines',
-                name='ZigZag',
-                line=dict(
-                    color='#00F5FF',  # 蓝色线条
-                    width=3
-                ),
-                connectgaps=True,
-            )
-        )
-
         return fig
 
 
@@ -1020,5 +980,5 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
 
 if __name__ == '__main__':
     test_jq(BacktestingAllowTradeDirection.ALL)
-    # test_jq(BacktestingAllowTradeDirection.LONG)
-    # test_jq(BacktestingAllowTradeDirection.SHORT)
+    test_jq(BacktestingAllowTradeDirection.LONG)
+    test_jq(BacktestingAllowTradeDirection.SHORT)

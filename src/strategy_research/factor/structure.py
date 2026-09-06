@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-
 def calc_swing_points(df: DataFrame,
                       left_bars_size: int = 2,
                       right_bars_size: int = 2,
