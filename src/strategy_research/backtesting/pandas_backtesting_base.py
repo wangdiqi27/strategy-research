@@ -60,9 +60,14 @@ class PandasBacktestingBase(ABC):
         self._signal_bar_df: DataFrame = pd.DataFrame()
         self._exec_bar_df: DataFrame = pd.DataFrame()
 
+        # 每天 top n 合约的信息
         self._date_top_n_major_bar_data_1d_dict: dict[date, dict] = {}
+        # 合约 symbol : bar_data
         self._symbol_bar_data_1m_dict: dict[str, dict[datetime, dict]] = {}
+        self._last_bar_data_datetime: datetime | None = None
+        # 按时间顺序排列的合约 symbol
         self._symbol_list: list[str] = []
+        # 合约 symbol 对应的在 self._symbol_list 中的 index
         self._symbol_index_dict: dict[str, int] = {}
 
         self.account: BacktestingAccount = BacktestingAccount(self.initial_capital,
@@ -110,6 +115,7 @@ class PandasBacktestingBase(ABC):
         datetime_bar_data_1m_dict = self._symbol_bar_data_1m_dict[symbol]
         bar_data = datetime_bar_data_1m_dict.get(bar_datetime, None)
         if bar_data is None:
+            print(f"symbol: {symbol}, bar_datetime: {bar_datetime}, bar_data is None")
             return None
 
         return bar_data
@@ -139,8 +145,18 @@ class PandasBacktestingBase(ABC):
 
         for symbol in symbol_top_n_major_bar_1m_df_dict:
             df = symbol_top_n_major_bar_1m_df_dict[symbol]
+            if self._last_bar_data_datetime:
+                 self._last_bar_data_datetime = max(df["datetime"].iloc[-1], self._last_bar_data_datetime)
+            else:
+                self._last_bar_data_datetime = df["datetime"].iloc[-1]
+
             datetime_bar_data_dict = df.set_index('datetime').to_dict('index')
             self._symbol_bar_data_1m_dict[symbol] = datetime_bar_data_dict
+
+        adjust_last_bar_data_datetime = self._last_bar_data_datetime - timedelta(days=20)
+        print(f"last_bar_data_datetime: {self._last_bar_data_datetime}, adjust datetime to: {adjust_last_bar_data_datetime}")
+
+        self.bar_df = self.bar_df.loc[self.bar_df["datetime"] <= adjust_last_bar_data_datetime]
 
     def _is_in_trading_time(self,
                             bar_datetime: datetime) -> bool:

@@ -535,11 +535,6 @@ class TrixVptResearch(PandasBacktestingBase):
                 # 上一个交易日设置成当前的交易日
                 last_trading_date = cur_trading_date
 
-            # 最新价更新
-            cur_close = minute_close_arr[i]
-            self.account.update_latest_price(self.symbol,
-                                             cur_close)
-
             # cur_position = self.account.get_position(self.symbol)
             cur_position = self.account.get_position_v2()
             cur_datetime = datetime_arr[i]
@@ -556,6 +551,13 @@ class TrixVptResearch(PandasBacktestingBase):
 
             if not self._is_in_trading_time(cur_datetime):
                 continue
+
+            # 最新价更新
+            cur_close = minute_close_arr[i]
+            if cur_position:
+                position_bar_data = self._get_contract_bar(cur_position.symbol, cur_datetime)
+                self.account.update_latest_price(cur_position.symbol,
+                                                 position_bar_data["close"])
 
             cur_major_contract_symbol, cur_major_contract_bar = self._get_major_contract_symbol_and_bar(cur_datetime)
             if (cur_major_contract_symbol is None
@@ -846,6 +848,9 @@ class TrixVptResearch(PandasBacktestingBase):
                             after_holding_low_bar_index = i
                             open_memory[cur_trading_date] = True
 
+        cur_position = self.account.get_position_v2()
+        if cur_position:
+            raise Exception("unexpected, backtesting is over, but we have position ever")
 
     def create_kline_fig(self) -> go.Figure:
         fig = make_subplots(
@@ -972,6 +977,7 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
                                                   trix_vpt_research.get_trades_df())
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
+            exit(0)
 
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
