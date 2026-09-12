@@ -12,7 +12,7 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.figure import COLOR_BAR_UP, COLOR_BAR_DOWN, COLOR_WHITE, COLOR_YELLOW
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.volume_price import calc_vpt, calc_ccl
+from strategy_research.factor.volume_price import calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase

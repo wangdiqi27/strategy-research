@@ -10,12 +10,12 @@ G_BACKTEST_SYMBOL_LIST: list[str] = [
 
 G_BACKTEST_PRODUCT_LIST: list[str] = [
     'FG',
-    # 'lc',
-    # 'ag',
-    # 'jd',
-    # 'MA',
-    # 'ps',
-    # 'sc',
-    # 'jm',
-    # 'rb',
+    'lc',
+    'ag',
+    'jd',
+    'MA',
+    'ps',
+    'sc',
+    'jm',
+    'rb',
 ]

@@ -10,8 +10,9 @@ from plotly import graph_objects as go
 from plotly.subplots import make_subplots
 
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
+from strategy_research.config.figure import COLOR_BAR_UP, COLOR_BAR_DOWN, COLOR_WHITE, COLOR_YELLOW
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.volume_price import calc_vpt, calc_ccl
+from strategy_research.factor.volume_price import calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
@@ -170,6 +171,17 @@ class TrixVptResearch(PandasBacktestingBase):
                     (x["trix_hist"] > x["prev_trix_hist"])
                     & (x["trix_hist"] > 0)
             ),
+
+            # macd
+            prev_macd_hist=lambda x: x["macd_hist"].shift(1),
+            macd_allow_close_long=lambda x: (
+                    (x["macd_hist"] < x["prev_macd_hist"])
+                    & (x["macd_hist"] < 0)
+            ),
+            macd_allow_close_short=lambda x: (
+                    (x["macd_hist"] > x["prev_macd_hist"])
+                    & (x["macd_hist"] > 0)
+            ),
         )
 
         is_trix_hist_pos = daily_signal_bar_df['trix_hist'] > 0
@@ -178,14 +190,21 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df['trix_pos_days'] = is_trix_hist_pos.groupby(pos_group).cumsum()
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
+
+        is_macd_hist_pos = daily_signal_bar_df['macd_hist'] > 0
+        is_macd_hist_neg = daily_signal_bar_df['macd_hist'] < 0
+        pos_group = (is_macd_hist_pos != is_macd_hist_pos.shift(1)).cumsum()
+        daily_signal_bar_df['macd_pos_days'] = is_macd_hist_pos.groupby(pos_group).cumsum()
+        neg_group = (is_macd_hist_neg != is_macd_hist_neg.shift(1)).cumsum()
+        daily_signal_bar_df['macd_neg_days'] = is_macd_hist_neg.groupby(neg_group).cumsum()
+
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
             atr_14=daily_signal_bar_df["atr_14"].shift(1),
 
-            # macd
-            macd_diff=daily_signal_bar_df["macd_diff"].shift(1),
-            macd_dea=daily_signal_bar_df["macd_dea"].shift(1),
-            macd_hist=daily_signal_bar_df["macd_hist"].shift(1),
+            # vol
+            volume=daily_signal_bar_df["volume"].shift(1),
+            open_interest=daily_signal_bar_df["open_interest"].shift(1),
 
             # ccl
             ccl=daily_signal_bar_df["ccl"].shift(1),
@@ -227,20 +246,29 @@ class TrixVptResearch(PandasBacktestingBase):
 
             # trix
             trix=daily_signal_bar_df["trix"].shift(1),
+            trix_signal=daily_signal_bar_df["trix_signal"].shift(1),
             trix_hist=daily_signal_bar_df["trix_hist"].shift(1),
             trix_pos_days=daily_signal_bar_df["trix_pos_days"].shift(1),
             trix_neg_days=daily_signal_bar_df["trix_neg_days"].shift(1),
             trix_allow_close_long=daily_signal_bar_df["trix_allow_close_long"].shift(1),
             trix_allow_close_short=daily_signal_bar_df["trix_allow_close_short"].shift(1),
+
+            # macd
+            macd_diff=daily_signal_bar_df["macd_diff"].shift(1),
+            macd_dea=daily_signal_bar_df["macd_dea"].shift(1),
+            macd_hist=daily_signal_bar_df["macd_hist"].shift(1),
+            macd_pos_days=daily_signal_bar_df["macd_pos_days"].shift(1),
+            macd_neg_days=daily_signal_bar_df["macd_neg_days"].shift(1),
+            macd_allow_close_long=daily_signal_bar_df["macd_allow_close_long"].shift(1),
+            macd_allow_close_short=daily_signal_bar_df["macd_allow_close_short"].shift(1),
         )
         require_columns = [
             # atr
             "atr_14",
 
-            # macd
-            "macd_diff",
-            "macd_dea",
-            "macd_hist",
+            # vol
+            "volume",
+            "open_interest",
 
             # ccl
             "ccl",
@@ -291,11 +319,21 @@ class TrixVptResearch(PandasBacktestingBase):
 
             # trix
             "trix",
+            "trix_signal",
             "trix_hist",
             "trix_pos_days",
             "trix_neg_days",
             "trix_allow_close_long",
             "trix_allow_close_short",
+
+            # macd
+            "macd_diff",
+            "macd_dea",
+            "macd_hist",
+            "macd_pos_days",
+            "macd_neg_days",
+            "macd_allow_close_long",
+            "macd_allow_close_short",
         ]
 
         strict_columns = [
@@ -336,6 +374,15 @@ class TrixVptResearch(PandasBacktestingBase):
             "trix_neg_days",
             "trix_allow_close_long",
             "trix_allow_close_short",
+
+            # macd
+            "macd_diff",
+            "macd_dea",
+            "macd_hist",
+            "macd_pos_days",
+            "macd_neg_days",
+            "macd_allow_close_long",
+            "macd_allow_close_short",
         ]
 
         daily_exec_bar_df = daily_exec_bar_df[require_columns]
@@ -439,8 +486,6 @@ class TrixVptResearch(PandasBacktestingBase):
 
         return minute_exec_bar_df, daily_signal_df
 
-
-
     def hybrid_backtest(self,
                         bar_1m_exec_df: DataFrame,
                         verbose: bool = False):
@@ -465,6 +510,13 @@ class TrixVptResearch(PandasBacktestingBase):
 
         daily_trix_pos_days_arr = bar_1m_exec_df["daily_trix_pos_days"].to_numpy()
         daily_trix_neg_days_arr = bar_1m_exec_df["daily_trix_neg_days"].to_numpy()
+
+        ## macd
+        daily_macd_allow_close_long_arr = bar_1m_exec_df['daily_macd_allow_close_long'].to_numpy()
+        daily_macd_allow_close_short_arr = bar_1m_exec_df['daily_macd_allow_close_short'].to_numpy()
+
+        daily_macd_pos_days_arr = bar_1m_exec_df["daily_macd_pos_days"].to_numpy()
+        daily_macd_neg_days_arr = bar_1m_exec_df["daily_macd_neg_days"].to_numpy()
 
         ## kline
         daily_prev_kline_direction_arr = bar_1m_exec_df["daily_kline_direction"].to_numpy()
@@ -853,37 +905,30 @@ class TrixVptResearch(PandasBacktestingBase):
 
     def create_kline_fig(self) -> go.Figure:
         fig = make_subplots(
-            rows=3,
+            rows=4,
             cols=1,
             shared_xaxes=True,
-            row_heights=[0.8, 0.1, 0.1],
+            row_heights=[0.55, 0.15, 0.15, 0.15],
             vertical_spacing=0.05,
-            subplot_titles=["K线", "TRIX 指标"]
+            subplot_titles=["K线", "VOL", "MACD", "CCL"],
+            specs=[
+                [{}],
+                [{"secondary_y": True}],
+                [{}],
+                [{}],
+            ]
         )
 
         return fig
 
-    def plot_indicator(self,
-                       fig: go.Figure,
-                       bar_df: DataFrame, ) -> go.Figure:
-        # TRIX 指标
-        datetime_str = bar_df['trading_date'].dt.strftime(self.datetime_formater)
-        fig.add_trace(
-            go.Scatter(
-                x=datetime_str,
-                y=bar_df['trix_hist'],
-                mode='lines',
-                name='TRIX-HIST',
-                line=dict(color='blue', width=1),
-                hovertemplate='<b>%{x}</b><br>TRIX-HIST: %{y:.4f}<extra></extra>'
-            ),
-            row=2,
-            col=1)
-
+    def _plot_indicator_ema(self,
+                            fig: go.Figure,
+                            x_axis: pd.Series,
+                            bar_df: DataFrame):
         # EMA5
         fig.add_trace(
             go.Scatter(
-                x=datetime_str,
+                x=x_axis,
                 y=bar_df['ema_5'],
                 mode='lines',
                 name='EMA5',
@@ -896,7 +941,7 @@ class TrixVptResearch(PandasBacktestingBase):
         # EMA10
         fig.add_trace(
             go.Scatter(
-                x=datetime_str,
+                x=x_axis,
                 y=bar_df['ema_10'],
                 mode='lines',
                 name='EMA10',
@@ -909,7 +954,7 @@ class TrixVptResearch(PandasBacktestingBase):
         # EMA20
         fig.add_trace(
             go.Scatter(
-                x=datetime_str,
+                x=x_axis,
                 y=bar_df['ema_20'],
                 mode='lines',
                 name='EMA20',
@@ -922,7 +967,7 @@ class TrixVptResearch(PandasBacktestingBase):
         # EMA40
         fig.add_trace(
             go.Scatter(
-                x=datetime_str,
+                x=x_axis,
                 y=bar_df['ema_40'],
                 mode='lines',
                 name='EMA40',
@@ -935,7 +980,7 @@ class TrixVptResearch(PandasBacktestingBase):
         # EMA60
         fig.add_trace(
             go.Scatter(
-                x=datetime_str,
+                x=x_axis,
                 y=bar_df['ema_60'],
                 mode='lines',
                 name='EMA60',
@@ -944,6 +989,175 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=1,
             col=1)
+
+    def _plot_indicator_trix(self,
+                             fig: go.Figure,
+                             x_axis: pd.Series,
+                             bar_df: DataFrame):
+        colors = np.where(bar_df['trix_hist'] > 0, COLOR_BAR_UP, COLOR_BAR_DOWN)
+        fig.add_trace(
+            go.Bar(
+                x=x_axis,
+                y=bar_df['trix_hist'],
+                marker_color=colors,
+                name='TRIX-HIST',
+                hovertemplate='<b>%{x}</b><br>TRIX-HIST: %{y:.4f}<extra></extra>'
+            ),
+            row=3,
+            col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis,
+                y=bar_df['trix'],
+                name='TRIX',
+                line=dict(color=COLOR_WHITE, width=1.2),
+            ),
+            row=3,
+            col=1)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis,
+                y=bar_df['trix_signal'],
+                name='TRIX_SIGNAL',
+                line=dict(color=COLOR_YELLOW, width=1.2),
+            ),
+            row=3,
+            col=1)
+
+    def _plot_indicator_macd(self,
+                             fig: go.Figure,
+                             x_axis: pd.Series,
+                             bar_df: DataFrame):
+        colors = np.where(bar_df['macd_hist'] > 0, COLOR_BAR_UP, COLOR_BAR_DOWN)
+        fig.add_trace(
+            go.Bar(
+                x=x_axis,
+                y=bar_df['macd_hist'],
+                marker_color=colors,
+                name='MACD-HIST',
+                hovertemplate='<b>%{x}</b><br>MACD-HIST: %{y:.4f}<extra></extra>'
+            ),
+            row=3,
+            col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis,
+                y=bar_df['macd_diff'],
+                name='DIF',
+                line=dict(color=COLOR_WHITE, width=1.2),
+            ),
+            row=3,
+            col=1)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis,
+                y=bar_df['macd_dea'],
+                name='DEA',
+                line=dict(color=COLOR_YELLOW, width=1.2),
+            ),
+            row=3,
+            col=1)
+
+    def _plot_indicator_vol_oi(self,
+                               fig: go.Figure,
+                               x_axis: pd.Series,
+                               bar_df: DataFrame):
+        up = bar_df['close'] > bar_df['close'].shift(1)
+        up.iloc[0] = True  # 第一根无前值，默认按红处理
+        vol_colors = np.where(up, COLOR_BAR_UP, COLOR_BAR_DOWN)
+
+        fig.add_trace(go.Bar(
+            x=x_axis,
+            y=bar_df['volume'],
+            marker_color=vol_colors,
+            name='成交量',
+            opacity=0.6,  # 半透明，避免压住OI线
+        ), row=2, col=1, secondary_y=False)
+
+        fig.add_trace(go.Scatter(
+            x=x_axis,
+            y=bar_df['open_interest'],
+            name='持仓量',
+            line=dict(color=COLOR_YELLOW, width=1.8),
+        ), row=2, col=1, secondary_y=True)
+
+        fig.update_yaxes(
+            # title_text='成交量（手）',
+            tickformat=',.0f',
+            zeroline=True, zerolinecolor='#666666', zerolinewidth=0.5,
+            rangemode='tozero',
+            row=2, col=1, secondary_y=False,
+        )
+
+        # 右轴（持仓量）：同样处理
+        fig.update_yaxes(
+            # title_text='持仓量（手）',
+            tickformat=',.0f',
+            tickfont=dict(color='#888888'),
+            showgrid=False,
+            row=2, col=1, secondary_y=True,
+        )
+
+    def _plot_indicator_ccl(self,
+                            fig: go.Figure,
+                            x_axis: pd.Series,
+                            bar_df: DataFrame):
+        ccl_style = {
+            'LONG_OPEN': ('多头增仓', COLOR_BAR_UP),  # 红：主动买进
+            'SHORT_CLOSE': ('空头平仓', COLOR_BAR_UP),  # 淡红：空头回补
+            'SHORT_OPEN': ('空头增仓', COLOR_BAR_DOWN),  # 绿：主动卖出
+            'LONG_CLOSE': ('多头平仓', COLOR_BAR_DOWN),  # 淡绿：多头离场
+        }
+
+        for ctype, (cname, color) in ccl_style.items():
+            mask = (bar_df['ccl_type'] == ctype)
+            fig.add_trace(go.Bar(
+                x=x_axis[mask],
+                y=bar_df['ccl'][mask],
+                name=cname,
+                marker_color=color,
+                hovertemplate='%{x}<br>' + cname + ': %{y:+,.0f} 手<extra></extra>',
+            ), row=4, col=1)
+
+        y_max = bar_df['ccl'].abs().max() * 1.1
+        fig.update_yaxes(
+            # title_text='仓差（手）',
+            tickformat=',.0f',  # 沿用你的千分位方案，避免出现 M 后缀
+            zeroline=True, zerolinecolor='#666666', zerolinewidth=1,
+            range=[-y_max, y_max],  # 对称范围，零轴始终居中
+            row=4, col=1,
+        )
+
+    def plot_indicator(self,
+                       fig: go.Figure,
+                       bar_df: DataFrame, ) -> go.Figure:
+        datetime_str = bar_df['trading_date'].dt.strftime(self.datetime_formater)
+        # EMA
+        self._plot_indicator_ema(fig,
+                                 datetime_str,
+                                 bar_df)
+
+        # VOL
+        self._plot_indicator_vol_oi(fig,
+                                    datetime_str,
+                                    bar_df)
+
+        # TRIX
+        self._plot_indicator_trix(fig,
+                                  datetime_str,
+                                  bar_df)
+
+        # # MACD
+        # self._plot_indicator_macd(fig,
+        #                           datetime_str,
+        #                           bar_df)
+
+        # CCL
+        self._plot_indicator_ccl(fig,
+                                 datetime_str,
+                                 bar_df)
 
         return fig
 
