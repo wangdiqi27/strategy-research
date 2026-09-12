@@ -723,7 +723,7 @@ class TrixVptResearch(PandasBacktestingBase):
                             cur_close,
                         )
                         if is_switch_contract:
-                            switch_contract_symbol, switch_contract_close = self._get_switch_contract_data(
+                            switch_contract_symbol, switch_contract_close = self._get_next_major_contract_data(
                                 cur_major_contract_symbol,
                                 cur_major_contract_bar,
                                 cur_datetime
@@ -797,7 +797,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         )
 
                         if is_switch_contract:
-                            switch_contract_symbol, switch_contract_close = self._get_switch_contract_data(
+                            switch_contract_symbol, switch_contract_close = self._get_next_major_contract_data(
                                 cur_major_contract_symbol,
                                 cur_major_contract_bar,
                                 cur_datetime

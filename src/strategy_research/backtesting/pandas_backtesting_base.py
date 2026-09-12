@@ -11,6 +11,7 @@ from plotly.subplots import make_subplots
 from strategy_research.backtesting.object import BacktestingAccount, BacktestingTradeStatistics, BacktestingDirection, \
     BacktestingPosition, BacktestingSummary, BacktestingAllowTradeDirection
 from strategy_research.config.exchange import get_contract_config
+from strategy_research.config.figure import COLOR_BAR_UP, COLOR_BAR_DOWN, COLOR_GREEN
 from strategy_research.tool.contract import ContractTool
 from strategy_research.tool.data import BarDataManager
 
@@ -61,53 +62,35 @@ class PandasBacktestingBase(ABC):
         self._exec_bar_df: DataFrame = pd.DataFrame()
 
         # 每天 top n 合约的信息
-        self._date_top_n_major_bar_data_1d_dict: dict[date, dict] = {}
+        self._daily_top_n_major_list: dict[date, list] = {}
         # 合约 symbol : bar_data
         self._symbol_bar_data_1m_dict: dict[str, dict[datetime, dict]] = {}
         self._last_bar_data_datetime: datetime | None = None
-        # 按时间顺序排列的合约 symbol
-        self._symbol_list: list[str] = []
-        # 合约 symbol 对应的在 self._symbol_list 中的 index
-        self._symbol_index_dict: dict[str, int] = {}
 
         self.account: BacktestingAccount = BacktestingAccount(self.initial_capital,
                                                               self.symbol)
 
     def _get_major_contract_symbol(self,
-                                   bar_datetime: datetime) -> str | None:
-        top_n_major_contract = self._date_top_n_major_bar_data_1d_dict.get(bar_datetime.date(), None)
-        if top_n_major_contract is None:
+                                   bar_datetime: datetime,
+                                   top_n: int = 1) -> str | None:
+        top_n_major_contract = self._daily_top_n_major_list.get(bar_datetime.date(), [])
+
+        if len(top_n_major_contract) < top_n:
             return None
 
-        return top_n_major_contract["rank1_symbol"]
-
-    def _get_secondary_major_contract_symbol(self,
-                                             bar_datetime: datetime) -> str | None:
-        top_n_major_contract = self._date_top_n_major_bar_data_1d_dict.get(bar_datetime.date(), None)
-        if top_n_major_contract is None:
-            return None
-
-        return top_n_major_contract["rank2_symbol"]
+        return top_n_major_contract[top_n - 1]["symbol"]
 
     def _get_major_contract_symbol_and_bar(self,
-                                           bar_datetime: datetime) -> tuple[str | None, dict | None]:
-        major_symbol = self._get_major_contract_symbol(bar_datetime)
+                                           bar_datetime: datetime,
+                                           top_n: int = 1) -> tuple[str | None, dict | None]:
+        major_symbol = self._get_major_contract_symbol(bar_datetime,
+                                                       top_n)
         if major_symbol is None:
             return None, None
 
         major_bar_data = self._get_contract_bar(major_symbol, bar_datetime)
 
         return major_symbol, major_bar_data
-
-    def _get_secondary_major_contract_symbol_and_bar(self,
-                                                     bar_datetime: datetime) -> tuple[str | None, dict | None]:
-        secondary_major_symbol = self._get_secondary_major_contract_symbol(bar_datetime)
-        if secondary_major_symbol is None:
-            return None, None
-
-        secondary_major_bar_data = self._get_contract_bar(secondary_major_symbol, bar_datetime)
-
-        return secondary_major_symbol, secondary_major_bar_data
 
     def _get_contract_bar(self,
                           symbol: str,
@@ -128,25 +111,15 @@ class PandasBacktestingBase(ABC):
         return last_trading_day
 
     def _process_major_contract(self):
-        top_n_major_contract_df, symbol_top_n_major_bar_1m_df_dict = BarDataManager.load_product_top_n_major_from_cache(
+        daily_top_n_major_list, symbol_top_n_major_bar_1m_df_dict = BarDataManager.load_product_top_n_major_from_cache(
             self.product, )
-        top_n_major_contract_df["date"] = pd.to_datetime(top_n_major_contract_df["datetime"]).dt.date
-        top_n_major_contract_df = top_n_major_contract_df.drop(columns=['datetime'])
-        date_top_n_major_contract_dict = top_n_major_contract_df.set_index('date').to_dict('index')
-        self._date_top_n_major_bar_data_1d_dict = date_top_n_major_contract_dict
+        self._daily_top_n_major_list = daily_top_n_major_list
 
-        major_symbol_list = sorted(symbol_top_n_major_bar_1m_df_dict.keys())
-        symbol_index_dict = {}
-        for i in range(len(major_symbol_list)):
-            symbol_index_dict[major_symbol_list[i]] = i
-
-        self._symbol_list = major_symbol_list
-        self._symbol_index_dict = symbol_index_dict
-
+        # 计算1分钟所有合约的最后一条记录是什么时候，使加权指数与之对其
         for symbol in symbol_top_n_major_bar_1m_df_dict:
             df = symbol_top_n_major_bar_1m_df_dict[symbol]
             if self._last_bar_data_datetime:
-                 self._last_bar_data_datetime = max(df["datetime"].iloc[-1], self._last_bar_data_datetime)
+                self._last_bar_data_datetime = max(df["datetime"].iloc[-1], self._last_bar_data_datetime)
             else:
                 self._last_bar_data_datetime = df["datetime"].iloc[-1]
 
@@ -154,7 +127,8 @@ class PandasBacktestingBase(ABC):
             self._symbol_bar_data_1m_dict[symbol] = datetime_bar_data_dict
 
         adjust_last_bar_data_datetime = self._last_bar_data_datetime - timedelta(days=20)
-        print(f"last_bar_data_datetime: {self._last_bar_data_datetime}, adjust datetime to: {adjust_last_bar_data_datetime}")
+        print(
+            f"last_bar_data_datetime: {self._last_bar_data_datetime}, adjust datetime to: {adjust_last_bar_data_datetime}")
 
         self.bar_df = self.bar_df.loc[self.bar_df["datetime"] <= adjust_last_bar_data_datetime]
 
@@ -180,7 +154,8 @@ class PandasBacktestingBase(ABC):
         major_symbol = self._get_major_contract_symbol(bar_datetime)
         major_bar_data = self._get_contract_bar(major_symbol, bar_datetime)
         major_last_trading_day = major_bar_data['last_trading_day']
-        secondary_major_symbol = self._get_secondary_major_contract_symbol(bar_datetime)
+        secondary_major_symbol = self._get_major_contract_symbol(bar_datetime,
+                                                                 2)
         if (major_symbol != position_symbol
                 and major_last_trading_day > position_last_trading_day
                 and ((position_last_trading_day - bar_datetime) < timedelta(days=20) or (
@@ -197,27 +172,25 @@ class PandasBacktestingBase(ABC):
 
         return False
 
-    def _get_switch_contract_data(self,
-                                  candidate_switch_contract_symbol: str,
-                                  candidate_switch_contract_bar: dict,
-                                  cur_datetime: datetime,
-                                  delta_days: int = 60) -> tuple[str, float]:
-        switch_contract_symbol = candidate_switch_contract_symbol
-        switch_contract_close = candidate_switch_contract_bar["close"]
-        if (candidate_switch_contract_bar["last_trading_day"] - cur_datetime) < timedelta(days=delta_days):
-            symbol_index = self._symbol_index_dict[candidate_switch_contract_symbol]
-            symbol_index += 1
-            if symbol_index != len(self._symbol_list):
-                switch_contract_symbol = self._symbol_list[symbol_index + 1]
-                switch_contract_bar = self._get_contract_bar(switch_contract_symbol, cur_datetime)
-                switch_contract_close = switch_contract_bar["close"]
+    def _get_next_major_contract_data(self,
+                                      cur_datetime: datetime,
+                                      delta_days: int = 30) -> tuple[str, float]:
+        switch_contract_symbol = self._get_major_contract_symbol(cur_datetime)
+        switch_contract_bar = self._get_contract_bar(switch_contract_symbol, cur_datetime)
+        top_n = 1
+        while (switch_contract_bar["last_trading_day"] - cur_datetime) < timedelta(days=delta_days):
+            top_n += 1
+            tmp_symbol = self._get_major_contract_symbol(cur_datetime, top_n)
+            if tmp_symbol is None:
+                break
 
-                print(f"candidate_contract_symbol: {candidate_switch_contract_symbol}, "
-                      f"candidate_switch_contract_bar.last_trading_day: {candidate_switch_contract_bar["last_trading_day"]}, "
-                      f"cur_datetime: {cur_datetime}, "
-                      f"switch_contract_symbol: {switch_contract_symbol}, ")
+            switch_contract_symbol = tmp_symbol
+            switch_contract_bar = self._get_contract_bar(switch_contract_symbol, cur_datetime)
 
-        return switch_contract_symbol, switch_contract_close
+        print(f"cur_datetime: {cur_datetime}, "
+              f"switch_contract_symbol: {switch_contract_symbol}, ")
+
+        return switch_contract_symbol, switch_contract_bar["close"]
 
     def run(self):
         if self.enable_jq_index_mode:
@@ -429,10 +402,10 @@ class PandasBacktestingBase(ABC):
                 low=bar_df['low'],
                 close=bar_df['close'],
                 name=f'{self.symbol}-{self.bar_period}',
-                increasing_line_color='red',  # 国内习惯：红涨
-                decreasing_line_color='green',  # 国内习惯：绿跌
-                increasing_fillcolor='red',
-                decreasing_fillcolor='green',
+                increasing_line_color=COLOR_BAR_UP,  # 国内习惯：红涨
+                decreasing_line_color=COLOR_GREEN,  # 国内习惯：绿跌
+                increasing_fillcolor=COLOR_BAR_UP,
+                decreasing_fillcolor=COLOR_GREEN,
                 hovertemplate='<b>%{x}</b><br>'
                               'OPEN: %{open}<br>'
                               'HIGH: %{high}<br>'
@@ -626,18 +599,18 @@ class PandasBacktestingBase(ABC):
             xaxis=dict(
                 type='category',  # 👈 显式指定为分类轴，彻底杜绝时间空白
                 rangeslider=dict(visible=False),  # 关闭默认的滑动条
-                matches='x2',
             ),
             xaxis2=dict(
                 type='category',
-                matches='x',
             ),
             xaxis3=dict(
                 type='category',
-                matches='x',
+            ),
+            xaxis4=dict(
+                type='category',
             ),
             hovermode='x unified',
-            # height=800,
+            height=1200,
             # template='plotly_white',
             template="plotly_dark",
         )

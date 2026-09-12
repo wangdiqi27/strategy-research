@@ -344,18 +344,13 @@ class BarDataManager:
 
     @classmethod
     def load_product_top_n_major_from_cache(cls,
-                                            product: str) -> tuple[DataFrame, dict[str, DataFrame]]:
+                                            product: str,
+                                            top_n: int = 3) -> tuple[dict[datetime, list], dict[str, DataFrame]]:
         symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
-        top_n_major_contract_df = ContractTool.get_top_n_contract_by_open_interest(symbol_bar_1d_df)
-        top_n_major_contract_df = top_n_major_contract_df.dropna()
-        top_1_symbol_list = top_n_major_contract_df["rank1_symbol"].unique().tolist()
-        top_2_symbol_list = top_n_major_contract_df["rank2_symbol"].unique().tolist()
-        # top_3_symbol_list = top_n_major_contract_df["rank3_symbol"].unique().tolist()
-
-        # major_symbol_list = list(set(top_1_symbol_list) | set(top_2_symbol_list) | set(top_3_symbol_list))
-        major_symbol_list = list(set(top_1_symbol_list) | set(top_2_symbol_list))
+        daily_top_n_major_list, all_top_n_symbol_list = ContractTool.get_daily_top_n_major_list(symbol_bar_1d_df,
+                                                                                                top_n)
         symbol_top_n_major_bar_1m_df_dict: dict[str, DataFrame] = {}
-        for symbol in major_symbol_list:
+        for symbol in all_top_n_symbol_list:
             bar_1m_df = cls.load_symbol_from_cache(symbol, "1m")
             if bar_1m_df.empty:
                 print(f"{symbol} dataframe is empty")
@@ -363,7 +358,7 @@ class BarDataManager:
 
             symbol_top_n_major_bar_1m_df_dict[symbol] = bar_1m_df
 
-        return top_n_major_contract_df, symbol_top_n_major_bar_1m_df_dict
+        return daily_top_n_major_list, symbol_top_n_major_bar_1m_df_dict
 
 
 class KLineTool:

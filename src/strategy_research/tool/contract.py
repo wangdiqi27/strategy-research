@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 import pandas as pd
 from pandas import DataFrame
@@ -169,3 +170,32 @@ class ContractTool:
             return m.group(1), m.group(2)
 
         return None, None
+
+    @staticmethod
+    def get_daily_top_n_major_list(symbol_bar_1d_df_dict: dict[str, DataFrame],
+                                   top_n: int) -> tuple[dict[datetime, list], list[str]]:
+        df_all = pd.concat(symbol_bar_1d_df_dict.values(), ignore_index=True)
+        df_all = df_all.sort_values(
+            by=["datetime", "last_trading_day"], kind="mergesort"
+        ).reset_index(drop=True)
+
+        # ===== 核心：3 行搞定主力 / 次主力 / 次次主力 ... =====
+        # 1) 每天从远月向近月方向的“后缀累计最大值”
+        df_all["suffix_oi_max"] = (
+            df_all.groupby("datetime")["open_interest"]
+            .transform(lambda s: s.iloc[::-1].cummax().iloc[::-1])
+        )
+        # 2) OI 等于其后缀最大值 => 在合约链上（月份序即 tier 序）
+        chain = df_all[df_all["open_interest"] == df_all["suffix_oi_max"]].copy()
+        # 3) （可选）打上 tier 标记：1=主力, 2=次主力, 3=次次主力...
+        chain["tier"] = chain.groupby("datetime").cumcount() + 1
+        chain = chain[chain["tier"] <= top_n]
+        all_symbols = chain["symbol"].drop_duplicates().tolist()
+
+        # ===== 转成 dict[datetime] -> list[dict] =====
+        result = {
+            dt.date(): g[["symbol", "last_trading_day", "open_interest"]].to_dict("records")
+            for dt, g in chain.groupby("datetime")
+        }
+
+        return result, all_symbols
