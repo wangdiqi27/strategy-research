@@ -85,8 +85,6 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df = calc_trix(daily_signal_bar_df,
                                         self.trix_period,
                                         self.trix_ma_period, )
-        daily_signal_bar_df = calc_vpt(daily_signal_bar_df,
-                                       self.vpt_ma_period, )
         daily_signal_bar_df = calc_macd(daily_signal_bar_df)
         daily_signal_bar_df = calc_ccl(daily_signal_bar_df)
         daily_signal_bar_df = daily_signal_bar_df.assign(
@@ -173,10 +171,6 @@ class TrixVptResearch(PandasBacktestingBase):
                     (x["trix_hist"] > x["prev_trix_hist"])
                     & (x["trix_hist"] > 0)
             ),
-
-            # vpt
-            vpt_hist=lambda x: x['vpt'] - x['vpt_ma'],
-            prev_vpt_hist=lambda x: x['vpt_hist'].shift(1),
 
             # macd
             prev_macd_hist=lambda x: x["macd_hist"].shift(1),

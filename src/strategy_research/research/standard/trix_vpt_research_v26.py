@@ -1,6 +1,6 @@
 import re
 import traceback
-from datetime import time, date, timedelta
+from datetime import time, date
 from pathlib import Path
 
 import numpy as np
@@ -10,14 +10,11 @@ from plotly import graph_objects as go
 from plotly.subplots import make_subplots
 
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
-from strategy_research.config.exchange import get_contract_config
 from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.structure import calc_swing_points, calc_zigzag
 from strategy_research.factor.volume_price import calc_vpt, calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
 from strategy_research.backtesting.pandas_backtesting_base import PandasBacktestingBase
-from strategy_research.tool.contract import ContractTool
 from strategy_research.tool.data import KLineTool, BarDataManager
 
 
@@ -87,8 +84,6 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df = calc_trix(daily_signal_bar_df,
                                         self.trix_period,
                                         self.trix_ma_period, )
-        daily_signal_bar_df = calc_vpt(daily_signal_bar_df,
-                                       self.vpt_ma_period, )
         daily_signal_bar_df = calc_macd(daily_signal_bar_df)
         daily_signal_bar_df = calc_ccl(daily_signal_bar_df)
         daily_signal_bar_df = daily_signal_bar_df.assign(
@@ -175,10 +170,6 @@ class TrixVptResearch(PandasBacktestingBase):
                     (x["trix_hist"] > x["prev_trix_hist"])
                     & (x["trix_hist"] > 0)
             ),
-
-            # vpt
-            vpt_hist=lambda x: x['vpt'] - x['vpt_ma'],
-            prev_vpt_hist=lambda x: x['vpt_hist'].shift(1),
         )
 
         is_trix_hist_pos = daily_signal_bar_df['trix_hist'] > 0
