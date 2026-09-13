@@ -910,7 +910,7 @@ class TrixVptResearch(PandasBacktestingBase):
             shared_xaxes=True,
             row_heights=[0.55, 0.15, 0.15, 0.15],
             vertical_spacing=0.05,
-            subplot_titles=["K线", "VOL", "MACD", "CCL"],
+            subplot_titles=["K线", "VOL", "TRIX", "CCL"],
             specs=[
                 [{}],
                 [{"secondary_y": True}],

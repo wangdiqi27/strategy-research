@@ -17,5 +17,4 @@ G_BACKTEST_PRODUCT_LIST: list[str] = [
     'ps',
     'sc',
     'jm',
-    'rb',
 ]
