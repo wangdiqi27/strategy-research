@@ -729,7 +729,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         close_reason = "动态止盈止损"
                     elif intraday_open_gap_down_pct_arr[i] > 0.01:
                         close_reason = "开盘跳空反转"
-                    elif (daily_prev_true_gap_down_pct_arr[i] > 0.01
+                    elif (daily_prev_true_gap_down_pct_arr[i] > 0.005
                           and cur_intraday_bar_index >= 30
                           and cur_return_today_open < 0
                     ):
@@ -825,7 +825,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         close_reason = '动态止盈止损'
                     elif intraday_open_gap_up_pct_arr[i] > 0.01:
                         close_reason = "开盘跳空反转"
-                    elif (daily_prev_true_gap_up_pct_arr[i] > 0.01
+                    elif (daily_prev_true_gap_up_pct_arr[i] > 0.005
                           and cur_intraday_bar_index >= 30
                           and cur_return_today_open > 0
                     ):
@@ -1030,6 +1030,11 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_macd(self,
                              fig: go.Figure,
@@ -1065,6 +1070,12 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_vol_oi(self,
                                fig: go.Figure,
@@ -1231,5 +1242,5 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
 
 if __name__ == '__main__':
     test_jq(BacktestingAllowTradeDirection.ALL)
-    # test_jq(BacktestingAllowTradeDirection.LONG)
-    # test_jq(BacktestingAllowTradeDirection.SHORT)
+    test_jq(BacktestingAllowTradeDirection.LONG)
+    test_jq(BacktestingAllowTradeDirection.SHORT)
