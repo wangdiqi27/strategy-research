@@ -1,4 +1,3 @@
-import pickle
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -10,7 +9,6 @@ import pandas as pd
 from pandas import DataFrame
 
 from vnpy.trader.database import get_database
-from vnpy.trader.object import BarData
 from vnpy_data_ext.database import PostgresqlDatabase
 
 from strategy_research.tool.contract import ContractTool
@@ -40,19 +38,20 @@ class BarDataManager:
     def _get_data_cache_1m_spread_df_dir(cls) -> Path:
         return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-index-spread"
 
-    @classmethod
-    def _get_data_cache_1m_bar_list_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1m-bar-list"
-
-    @classmethod
-    def _get_data_cache_1d_bar_list_dir(cls) -> Path:
-        return cls.BAR_DATA_CACHE_ROOT_DIR / "1d-bar-list"
-
     @staticmethod
     def _load_bar_data_as_df_from_database(symbol: str,
                                            interval: Interval,
                                            start_time: datetime,
                                            end_time: datetime, ) -> DataFrame:
+        """
+        从数据库下载合约分钟级K线数据，以 DataFrame 返回
+
+        :param symbol:
+        :param interval:
+        :param start_time:
+        :param end_time:
+        :return:
+        """
         database: PostgresqlDatabase = get_database()
         bars = database.load_bar_data(symbol,
                                       ContractTool.get_exchange_by_symbol(symbol),
@@ -82,28 +81,22 @@ class BarDataManager:
 
         return df
 
-    @staticmethod
-    def _load_bar_data_as_list_from_database(symbol: str,
-                                             interval: Interval,
-                                             start: datetime,
-                                             end: datetime) -> list[BarData]:
-        database: PostgresqlDatabase = get_database()
-        bars = database.load_bar_data(symbol,
-                                      ContractTool.get_exchange_by_symbol(symbol),
-                                      interval,
-                                      start,
-                                      end)
-        bars.sort(key=lambda bar: bar.datetime)
-
-        return bars
-
     @classmethod
-    def download_bar_df_to_cache(
+    def download_bar_df_to_files(
             cls,
             product_list: list[str],
             contract_start_year: int,
             contract_end_year: int,
             interval: Interval, ):
+        """
+        从数据库下载数据到本地，并存成 csv 文件
+
+        :param product_list:
+        :param contract_start_year:
+        :param contract_end_year:
+        :param interval:
+        :return:
+        """
         china_tz = ZoneInfo("Asia/Shanghai")
         # 比合约提前一年的数据
         load_data_start_date = datetime(contract_start_year - 1, 1, 1, tzinfo=china_tz)
@@ -132,39 +125,16 @@ class BarDataManager:
                     bar_df.to_csv(cache_file, index=True)
 
     @classmethod
-    def download_bar_list_to_cache(
-            cls,
-            product_list: list[str],
-            contract_start_year: int,
-            contract_end_year: int,
-            interval: Interval, ):
-        china_tz = ZoneInfo("Asia/Shanghai")
-        # 比合约提前一年的数据
-        load_data_start_date = datetime(contract_start_year - 1, 1, 1, tzinfo=china_tz)
-        load_data_end_date = datetime(contract_end_year, 12, 31, tzinfo=china_tz)
-        suffixes = ContractTool.generate_contract_suffix(contract_start_year, contract_end_year)
-        if interval == Interval.MINUTE:
-            cache_dir = cls._get_data_cache_1m_bar_list_dir()
-        else:
-            cache_dir = cls._get_data_cache_1d_bar_list_dir()
+    def load_bar_df_from_file(cls,
+                              symbol: str,
+                              period: str):
+        """
+        从文件加载 bar_df 数据
 
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        for product in product_list:
-            for suffix in suffixes:
-                symbol = ContractTool.generate_symbol_by_product_and_suffix(product, suffix)
-                cache_file = cache_dir / f"{symbol}.pkl"
-                bars_list = cls._load_bar_data_as_list_from_database(symbol, interval,
-                                                                     load_data_start_date,
-                                                                     load_data_end_date)
-
-                if bars_list:
-                    with open(cache_file, "wb") as f:
-                        pickle.dump(bars_list, f)
-
-    @classmethod
-    def load_bar_df_from_cache(cls,
-                               symbol: str,
-                               period: str):
+        :param symbol:
+        :param period:
+        :return:
+        """
         if period == "1m":
             cache_dir = cls._get_data_cache_1m_df_dir()
         else:
@@ -204,9 +174,16 @@ class BarDataManager:
             return pd.DataFrame()
 
     @classmethod
-    def load_spread_bar_df_from_cache(cls,
-                                      symbol: str,
-                                      period: str):
+    def load_spread_bar_df_from_file(cls,
+                                     symbol: str,
+                                     period: str):
+        """
+        从文件加载价差bar_df
+
+        :param symbol:
+        :param period:
+        :return:
+        """
         if period == "1m":
             cache_dir = cls._get_data_cache_1m_spread_df_dir()
         else:
@@ -229,9 +206,16 @@ class BarDataManager:
             return pd.DataFrame()
 
     @classmethod
-    def get_symbols_by_product_from_cache(cls,
+    def get_symbols_by_product_from_files(cls,
                                           product: str,
-                                          period: str):
+                                          period: str) -> list[str]:
+        """
+        根据文件列出某个品种的所有合约代码
+
+        :param product:
+        :param period:
+        :return:
+        """
         if period == "1m":
             cache_dir = cls._get_data_cache_1m_df_dir()
         else:
@@ -249,7 +233,14 @@ class BarDataManager:
     def load_product_from_cache(cls,
                                 product: str,
                                 period: str) -> dict[str, DataFrame]:
-        symbol_list = cls.get_symbols_by_product_from_cache(product, period)
+        """
+        获取该品种所有的 bar_df
+
+        :param product:
+        :param period:
+        :return:
+        """
+        symbol_list = cls.get_symbols_by_product_from_files(product, period)
         symbol_bar_df: dict[str, DataFrame] = {}
 
         for symbol in symbol_list:
@@ -270,7 +261,7 @@ class BarDataManager:
         if symbol in symbol_bar_df_cache:
             return symbol_bar_df_cache[symbol]
 
-        bar_df = cls.load_bar_df_from_cache(symbol, period)
+        bar_df = cls.load_bar_df_from_file(symbol, period)
         symbol_bar_df_cache[symbol] = bar_df
 
         return bar_df
@@ -287,7 +278,7 @@ class BarDataManager:
         if spread_symbol in symbol_bar_df_cache:
             return symbol_bar_df_cache[spread_symbol]
 
-        bar_df = cls.load_spread_bar_df_from_cache(spread_symbol, period)
+        bar_df = cls.load_spread_bar_df_from_file(spread_symbol, period)
         symbol_bar_df_cache[spread_symbol] = bar_df
 
         return bar_df
