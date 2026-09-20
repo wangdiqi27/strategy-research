@@ -205,12 +205,14 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df['macd_neg_days'] = is_macd_hist_neg.groupby(neg_group).cumsum()
 
         # 计算 EMA 多头排列、空头排列天数
-        ema_bull = (daily_signal_bar_df['ema_5'] > daily_signal_bar_df['ema_10']) & (daily_signal_bar_df['ema_10'] > daily_signal_bar_df['ema_20'])
-        ema_bear = (daily_signal_bar_df['ema_5'] < daily_signal_bar_df['ema_10']) & (daily_signal_bar_df['ema_10'] < daily_signal_bar_df['ema_20'])
-        group_id = (ema_bull != ema_bull.shift(1)).cumsum()
-        daily_signal_bar_df['ema_bull_days'] = ema_bull.groupby(group_id).cumsum()
-        group_id = (ema_bear != ema_bear.shift(1)).cumsum()
-        daily_signal_bar_df['ema_bear_days'] = ema_bear.groupby(group_id).cumsum()
+        ema_long_bull = (daily_signal_bar_df['ema_5'] > daily_signal_bar_df['ema_10']) & (
+                daily_signal_bar_df['ema_10'] > daily_signal_bar_df['ema_20'])
+        ema_long_bear = (daily_signal_bar_df['ema_5'] < daily_signal_bar_df['ema_10']) & (
+                daily_signal_bar_df['ema_10'] < daily_signal_bar_df['ema_20'])
+        group_id = (ema_long_bull != ema_long_bull.shift(1)).cumsum()
+        daily_signal_bar_df['ema_long_bull_days'] = ema_long_bull.groupby(group_id).cumsum()
+        group_id = (ema_long_bear != ema_long_bear.shift(1)).cumsum()
+        daily_signal_bar_df['ema_long_bear_days'] = ema_long_bear.groupby(group_id).cumsum()
 
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
@@ -249,8 +251,8 @@ class TrixVptResearch(PandasBacktestingBase):
             ema_20=daily_signal_bar_df['ema_20'].shift(1),
             ema_40=daily_signal_bar_df['ema_40'].shift(1),
             ema_60=daily_signal_bar_df['ema_60'].shift(1),
-            ema_bull_days=daily_signal_bar_df['ema_bull_days'].shift(1),
-            ema_bear_days=daily_signal_bar_df['ema_bear_days'].shift(1),
+            ema_long_bull_days=daily_signal_bar_df['ema_long_bull_days'].shift(1),
+            ema_long_bear_days=daily_signal_bar_df['ema_long_bear_days'].shift(1),
 
             # channel
             channel_high=daily_signal_bar_df["channel_high"].shift(1),
@@ -324,8 +326,8 @@ class TrixVptResearch(PandasBacktestingBase):
             "ema_20",
             "ema_40",
             "ema_60",
-            "ema_bull_days",
-            "ema_bear_days",
+            "ema_long_bull_days",
+            "ema_long_bear_days",
 
             # channel
             "channel_high",
@@ -376,8 +378,8 @@ class TrixVptResearch(PandasBacktestingBase):
             "ema_20",
             "ema_40",
             "ema_60",
-            "ema_bull_days",
-            "ema_bear_days",
+            "ema_long_bull_days",
+            "ema_long_bear_days",
 
             # channel
             "channel_high",
@@ -548,8 +550,8 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_ema10_arr = bar_1m_exec_df["daily_ema_10"].to_numpy()
         daily_ema20_arr = bar_1m_exec_df["daily_ema_20"].to_numpy()
         daily_ema40_arr = bar_1m_exec_df["daily_ema_40"].to_numpy()
-        daily_ema_bull_days_arr = bar_1m_exec_df["daily_ema_bull_days"].to_numpy()
-        daily_ema_bear_days_arr = bar_1m_exec_df["daily_ema_bear_days"].to_numpy()
+        daily_ema_long_bull_days_arr = bar_1m_exec_df["daily_ema_long_bull_days"].to_numpy()
+        daily_ema_long_bear_days_arr = bar_1m_exec_df["daily_ema_long_bear_days"].to_numpy()
 
         # 分钟级指标
 
@@ -644,7 +646,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open > 0
                     and (daily_ema5_arr[i] > daily_ema10_arr[i] > daily_ema20_arr[i])
-                    and daily_ema_bull_days_arr[i] >= 3
+                    and daily_ema_long_bull_days_arr[i] >= 3
             )
             channel_can_open_short_condition = (
                     cur_is_channel_compression
@@ -652,7 +654,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open < 0
                     and (daily_ema5_arr[i] < daily_ema10_arr[i] < daily_ema20_arr[i])
-                    and daily_ema_bear_days_arr[i] >= 3
+                    and daily_ema_long_bear_days_arr[i] >= 3
             )
 
             if cur_position is None or cur_position.volume == 0:
@@ -1049,6 +1051,11 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_macd(self,
                              fig: go.Figure,
@@ -1084,6 +1091,12 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_vol_oi(self,
                                fig: go.Figure,

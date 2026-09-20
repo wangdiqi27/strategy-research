@@ -206,9 +206,9 @@ class TrixVptResearch(PandasBacktestingBase):
 
         # 计算 EMA 多头排列、空头排列天数
         ema_long_bull = (daily_signal_bar_df['ema_5'] > daily_signal_bar_df['ema_10']) & (
-                    daily_signal_bar_df['ema_10'] > daily_signal_bar_df['ema_20'])
+                daily_signal_bar_df['ema_10'] > daily_signal_bar_df['ema_20'])
         ema_long_bear = (daily_signal_bar_df['ema_5'] < daily_signal_bar_df['ema_10']) & (
-                    daily_signal_bar_df['ema_10'] < daily_signal_bar_df['ema_20'])
+                daily_signal_bar_df['ema_10'] < daily_signal_bar_df['ema_20'])
         group_id = (ema_long_bull != ema_long_bull.shift(1)).cumsum()
         daily_signal_bar_df['ema_long_bull_days'] = ema_long_bull.groupby(group_id).cumsum()
         group_id = (ema_long_bear != ema_long_bear.shift(1)).cumsum()
