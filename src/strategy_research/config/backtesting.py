@@ -12,9 +12,9 @@ G_BACKTEST_PRODUCT_LIST: list[str] = [
     'FG',
     'lc',
     'ag',
-    'jd',
-    'MA',
     'sc',
     'jm',
     'ps',
+    'jd',
+    'MA',
 ]

@@ -173,7 +173,8 @@ class ContractTool:
 
     @staticmethod
     def get_daily_top_n_major_list(symbol_bar_1d_df_dict: dict[str, DataFrame],
-                                   top_n: int) -> tuple[dict[datetime, list], list[str]]:
+                                   top_n: int,
+                                   sort_field: str = "open_interest") -> tuple[dict[datetime, list], list[str]]:
         df_all = pd.concat(symbol_bar_1d_df_dict.values(), ignore_index=True)
         df_all = df_all.sort_values(
             by=["datetime", "last_trading_day"], kind="mergesort"
@@ -181,12 +182,12 @@ class ContractTool:
 
         # ===== 核心：3 行搞定主力 / 次主力 / 次次主力 ... =====
         # 1) 每天从远月向近月方向的“后缀累计最大值”
-        df_all["suffix_oi_max"] = (
-            df_all.groupby("datetime")["open_interest"]
+        df_all["suffix_sort_field_max"] = (
+            df_all.groupby("datetime")[sort_field]
             .transform(lambda s: s.iloc[::-1].cummax().iloc[::-1])
         )
         # 2) OI 等于其后缀最大值 => 在合约链上（月份序即 tier 序）
-        chain = df_all[df_all["open_interest"] == df_all["suffix_oi_max"]].copy()
+        chain = df_all[df_all[sort_field] == df_all["suffix_sort_field_max"]].copy()
         # 3) （可选）打上 tier 标记：1=主力, 2=次主力, 3=次次主力...
         chain["tier"] = chain.groupby("datetime").cumcount() + 1
         chain = chain[chain["tier"] <= top_n]
@@ -194,7 +195,7 @@ class ContractTool:
 
         # ===== 转成 dict[datetime] -> list[dict] =====
         result = {
-            dt.date(): g[["symbol", "last_trading_day", "open_interest"]].to_dict("records")
+            dt.date(): g[["symbol", "last_trading_day", "volume", "open_interest"]].to_dict("records")
             for dt, g in chain.groupby("datetime")
         }
 
