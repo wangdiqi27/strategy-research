@@ -669,6 +669,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
                         continue
 
+                    open_reason = "channel_condition"
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                     take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
 
@@ -696,6 +697,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
                         continue
 
+                    open_reason = "channel_condition"
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                     take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
 

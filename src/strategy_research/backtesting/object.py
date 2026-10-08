@@ -731,31 +731,32 @@ class BacktestingOverallStatistics:
         writer = pd.ExcelWriter(self.report_path / f'{filename}.xlsx', engine='xlsxwriter')
         if trade_df_list:
             for trade_df in trade_df_list:
-                symbol = trade_df["symbol"].iloc[0]
-                product_sheet_name = ContractTool.get_product_by_symbol(symbol)
-                columns = [
-                    "symbol",
-                    "direction",
-                    "open_time",
-                    "close_time",
-                    "open_price",
-                    "open_reason",
-                    "close_price",
-                    "close_reason",
-                    "volume",
-                    "net_profit",
-                    "gross_profit",
-                    "take_profit",
-                    "stop_loss",
-                ]
-                filter_trade_df = trade_df[columns]
-                filter_trade_df['open_time'] = filter_trade_df['open_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                filter_trade_df['close_time'] = filter_trade_df['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                filter_trade_df.to_excel(writer,
-                                         sheet_name=product_sheet_name,
-                                         engine='xlsxwriter', )
-                worksheet = writer.sheets[product_sheet_name]
-                worksheet.autofit()
+                if not trade_df.empty:
+                    symbol = trade_df["symbol"].iloc[0]
+                    product_sheet_name = ContractTool.get_product_by_symbol(symbol)
+                    columns = [
+                        "symbol",
+                        "direction",
+                        "open_time",
+                        "close_time",
+                        "open_price",
+                        "open_reason",
+                        "close_price",
+                        "close_reason",
+                        "volume",
+                        "net_profit",
+                        "gross_profit",
+                        "take_profit",
+                        "stop_loss",
+                    ]
+                    filter_trade_df = trade_df[columns]
+                    filter_trade_df['open_time'] = filter_trade_df['open_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    filter_trade_df['close_time'] = filter_trade_df['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    filter_trade_df.to_excel(writer,
+                                             sheet_name=product_sheet_name,
+                                             engine='xlsxwriter', )
+                    worksheet = writer.sheets[product_sheet_name]
+                    worksheet.autofit()
 
         writer.close()
 

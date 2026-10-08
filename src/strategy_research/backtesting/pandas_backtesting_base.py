@@ -452,6 +452,7 @@ class PandasBacktestingBase(ABC):
             "open_time",
             "open_trading_date",
             "open_price",
+            "open_reason",
             "take_profit",
             "stop_loss",
             "open_index_price",
@@ -471,12 +472,13 @@ class PandasBacktestingBase(ABC):
                     line=dict(width=1, color='white')  # 加点白边更好看
                 ),
                 # customdata 传入多个列，按顺序组成一个二维数组
-                customdata=open_points_df[['take_profit', 'stop_loss']],
+                customdata=open_points_df[['open_reason', 'take_profit', 'stop_loss']],
                 # 在 hovertemplate 中用 %{customdata[index]} 提取
                 hovertemplate='<b>%{x}</b><br>' +
                               '开仓价: %{y:.2f}<br>' +
-                              '止盈价: %{customdata[0]}<br>' +
-                              '止损价: %{customdata[1]:.2f}<br>' +
+                              '开仓原因: %{customdata[0]}<br>' +
+                              '止盈价: %{customdata[1]}<br>' +
+                              '止损价: %{customdata[2]:.2f}<br>' +
                               '<extra></extra>',  # <extra></extra> 用于隐藏右侧的 trace 名称
             ),
             row=1,
