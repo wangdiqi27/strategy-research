@@ -841,7 +841,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     if channel_can_open_long_condition:
                         close_reason = '达到开多条件，平仓开多'
                         is_reverse_open = True
-                    if cur_close >= cur_position.stop_loss:
+                    elif cur_close >= cur_position.stop_loss:
                         close_reason = '止损'
                     elif (adjust_stop_loss > 0
                           and cur_close > adjust_stop_loss):

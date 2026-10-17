@@ -47,6 +47,7 @@ class TrixVptResearch(PandasBacktestingBase):
                  vpt_ma_period: int = 14,
                  vpt_z_score_threshold: float = 1.5,
                  ema_pack_min_regime_days: int = 30,
+                 ema_pack_max_mixed_gap_days: int | None = None,
                  extreme_lookback: int = 60,
                  max_extreme_distance_pct: float = 0.5, ):
         super().__init__(factor_name,
@@ -76,8 +77,10 @@ class TrixVptResearch(PandasBacktestingBase):
         self.vpt_z_score_threshold = vpt_z_score_threshold
 
         self.ema_pack_min_regime_days = ema_pack_min_regime_days
+        self.ema_pack_max_mixed_gap_days = ema_pack_max_mixed_gap_days
 
-        self.ema_pack_state = EmaPackCrossStateMachine(self.ema_pack_min_regime_days)
+        self.ema_pack_state = EmaPackCrossStateMachine(self.ema_pack_min_regime_days,
+                                                       self.ema_pack_max_mixed_gap_days)
 
         self.extreme_lookback = extreme_lookback
         self.max_extreme_distance_pct = max_extreme_distance_pct
@@ -827,12 +830,8 @@ class TrixVptResearch(PandasBacktestingBase):
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == -1
-                            # and cur_intraday_bar_index >= 5
-                            # and cur_return_today_open < 0
                     ):
                         close_reason = "前一根巨型阴线"
-                    # elif cur_close < cur_channel_low:
-                    #     close_reason = '价格低于通道低点'
                     elif (
                             daily_trix_allow_close_long_arr[i]
                             and holding_trading_days >= self.min_required_holding_days
@@ -840,9 +839,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
-                    #     close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
@@ -908,7 +904,7 @@ class TrixVptResearch(PandasBacktestingBase):
                     if channel_can_open_long_condition:
                         close_reason = '达到开多条件，平仓开多'
                         is_reverse_open = True
-                    if cur_close >= cur_position.stop_loss:
+                    elif cur_close >= cur_position.stop_loss:
                         close_reason = '止损'
                     elif (adjust_stop_loss > 0
                           and cur_close > adjust_stop_loss):
@@ -1332,5 +1328,5 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
 
 if __name__ == '__main__':
     test_jq(BacktestingAllowTradeDirection.ALL)
-    # test_jq(BacktestingAllowTradeDirection.LONG)
-    # test_jq(BacktestingAllowTradeDirection.SHORT)
+    test_jq(BacktestingAllowTradeDirection.LONG)
+    test_jq(BacktestingAllowTradeDirection.SHORT)
