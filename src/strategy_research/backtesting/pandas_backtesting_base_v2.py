@@ -978,6 +978,11 @@ class PandasBacktestingBaseV2:
         print(f"{'-' * 10} start plot  {'-' * 10}")
         trade_df = self.account.trade_recorder.get_trades_df()
         kline_fig = self.create_kline_fig()
+        # x 轴范围钉住：plotly 的 category 轴在图中含散点 trace（如 SAR）时，
+        # autorange 会加 ±6% 对称内边距（K 线离 y 轴留白）；显式钉住范围使
+        # K 线贴轴显示，与早期版本视觉一致。子图 x 轴 matches x4 自动跟随。
+        n_days = len(bar_1d_df)
+        kline_fig.update_layout(xaxis4=dict(range=[-0.5, n_days - 0.5]))
         self.plot(kline_fig, bar_1d_df, trade_df)
 
     # endregion =================================================================

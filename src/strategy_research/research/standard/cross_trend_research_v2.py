@@ -984,5 +984,5 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
 
 if __name__ == '__main__':
     test_jq(BacktestingAllowTradeDirection.ALL)
-    # test_jq(BacktestingAllowTradeDirection.LONG)
-    # test_jq(BacktestingAllowTradeDirection.SHORT)
+    test_jq(BacktestingAllowTradeDirection.LONG)
+    test_jq(BacktestingAllowTradeDirection.SHORT)
