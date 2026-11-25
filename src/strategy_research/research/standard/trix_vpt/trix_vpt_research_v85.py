@@ -1,5 +1,7 @@
 import re
+from time import perf_counter
 import traceback
+from collections import deque
 from datetime import time, date
 from pathlib import Path
 
@@ -51,9 +53,21 @@ class TrixVptResearch(PandasBacktestingBase):
                  ema_pack_max_mixed_gap_days: int | None = None,
                  extreme_lookback: int = 60,
                  max_extreme_distance_pct: float = 0.5,
+                 stop_loss_ticks: int = 1,
+                 reversal_retrace_atr_mult: float = 3.0,
+                 reversal_prev_vol_gate: bool = True,
+                 reversal_prev_oi_gate: bool = True,
+                 reversal_prev_vol_ratio_max: float = 1.0,
+                 reversal_prev_oi_ratio_max: float = 1.0,
+                 reversal_prev_window: int = 3,
+                 reversal_prev_base_window: int = 14,
                  sar_af_start: float = 0.02,
                  sar_af_step: float = 0.02,
                  sar_af_max: float = 0.2, ):
+        # v83 = v81 + 主力判定 T-1 昨持仓口径（use_t1_major=True）——
+        # 对齐 trowel 实盘 _arrange_contract（FuturesDailyData.pre_open_interest），
+        # 消除研究版"当日收盘 OI 判主力"的盘中未来数据；其余口径与 v81 完全一致。
+        # trowel 侧移植锚自此由 v81 更新为 v83。
         super().__init__(factor_name,
                          version,
                          symbol,
@@ -64,7 +78,9 @@ class TrixVptResearch(PandasBacktestingBase):
                          enable_fig_daily_mode,
                          enable_debug_mode,
                          enable_jq_index_mode,
-                         allow_trade_direction)
+                         allow_trade_direction,
+                         use_t1_major=True,
+                         filter_auction_bars=True)
         self.atr_period = atr_period
         self.volume_period = volume_period
         self.volume_threshold = volume_threshold
@@ -88,6 +104,46 @@ class TrixVptResearch(PandasBacktestingBase):
 
         self.extreme_lookback = extreme_lookback
         self.max_extreme_distance_pct = max_extreme_distance_pct
+
+        # 本文件为 v76-b「缩量+减仓门」的正典化版本（v81）+ T-1 主力口径（v83）
+        # + 集合竞价脏 bar 过滤（v84）+ 量仓门喂入起点解耦（v85）——
+        # v85 修复：量仓门 deque 原随 exec_df（strict dropna 后）才开始喂入，
+        # 导致门在 exec_df 起步后的前 ~15 个交易日处于 fail-open，
+        # 与 trowel（门自 cache 起点即开始喂入）产生不对称 → 信号数量不一致。
+        # v85 将门的逐日喂入数据改从完整日线序列（dropna 之前）提取并预填 deque，
+        # 门的可见历史起点与 trowel 对齐。v81/v83/v84 保留为历史口径档案。
+        # 自 v81 起约定：不再使用 a/b 等参数后缀，默认参数不同的实验一律新开版本文件。
+        #
+        # 反转搏击单的确认与止损（v73 起源，v81 定稿口径）：
+        # - 触发：贴近极值的首次结构破位（SAR 趋势 + 距 60 日极值回撤 ≤ 10% +
+        #   close 击穿/突破 7 日高低点），不等三线穿越 EMA40 的滞后确认；
+        # - 实证：v56 均线束单等待穿越后入场，亏损单入场时已从极值走了 20.7%（中位），
+        #   前 5 日内有天量的反转单 5 败 1 胜（V 型顶巨量在信号之前发生，穿越时已错过）；
+        # - 止损：近期 7 日高低点 ± N tick（结构位小止损）
+        # - 方向一致性门：信号日 ccl_type 极性与注单方向须一致（收盘价方向confirm）；
+        #   盈亏分解：盈利单 8/9 方向一致，亏损单 12 笔中 5 笔方向相反（信号日反向 = '
+        #   回踩噪声首穿'）；放量门经验证为负贡献（放量反转单更易亏损），弃用
+        # - 反转搏击单用结构位小止损：近期 7 日高低点 ± N tick（打结构位 = 反转失败即离场），
+        #   通道压缩路径仍保持 v56 的入场价 ± 2ATR 止损
+        self.stop_loss_ticks = stop_loss_ticks
+        # 贴近极值锚的 ATR 归一化阈值：距 60 日极值 ≤ K × ATR
+        # （固定 10% 在低波动品种上等价距离过远，导致 ag/sc 反复触发；
+        #   ATR 归一化后自动按品种波动收紧/放宽，防御性统一规则）
+        self.reversal_retrace_atr_mult = reversal_retrace_atr_mult
+
+        # 前 N 交易日量仓综合门（v81 正典：62 个反转搏击事件的描述性分析 + 全品种回测双确认，
+        #   默认启用 vol_gate=True + oi_gate=True，即「缩量+减仓」最优象限门；T-1 口径无未来数据）：
+        #   近 window 日均量 / 近 base 日均量 = vol_ratio；持仓同构 oi_ratio。
+        #   组合胜率：缩量+减仓 43.5% > 基准 33.9% > 放量系 25~28.6%。
+        # - vol_gate：要求 vol_ratio ≤ max（排除放量破位）
+        # - oi_gate：要求 oi_ratio ≤ max（排除“缩量+增仓”逆势投机破位，
+        #   与 vol_gate 组合得到最优组“缩量+减仓”）
+        self.reversal_prev_vol_gate = reversal_prev_vol_gate
+        self.reversal_prev_oi_gate = reversal_prev_oi_gate
+        self.reversal_prev_vol_ratio_max = reversal_prev_vol_ratio_max
+        self.reversal_prev_oi_ratio_max = reversal_prev_oi_ratio_max
+        self.reversal_prev_window = reversal_prev_window
+        self.reversal_prev_base_window = reversal_prev_base_window
 
         self.sar_af_start = sar_af_start
         self.sar_af_step = sar_af_step
@@ -559,7 +615,38 @@ class TrixVptResearch(PandasBacktestingBase):
         minute_exec_bar_df = minute_exec_bar_df.dropna(subset=daily_strict_columns)
         minute_exec_bar_df = minute_exec_bar_df.reset_index(drop=True)
 
+        # v85：量仓门喂入数据与 strict dropna 解耦——
+        # 用完整日线序列（dropna 之前的 daily_signal_df，逐日 own 值）提取
+        # (trading_date, 当日总量, 日末持仓)，供 hybrid 循环前预填门的 deque。
+        self._gate_daily_feed = [
+            (row["trading_date"], float(row["volume"]), float(row["open_interest"]))
+            for _, row in daily_signal_df[["trading_date", "volume", "open_interest"]].iterrows()
+            if pd.notna(row["trading_date"]) and pd.notna(row["volume"]) and pd.notna(row["open_interest"])
+        ]
+
         return minute_exec_bar_df, daily_signal_df
+
+    def _prev_days_gates_pass(self) -> bool:
+        """前 N 交易日量仓综合门（T-1 口径，触发时不使用当日量仓，无未来数据）。"""
+        vol_dq = list(self._gate_volume_deque)
+        oi_dq = list(self._gate_oi_deque)
+        need = self.reversal_prev_base_window
+        if len(vol_dq) < need + 1 or len(oi_dq) < need + 1:
+            return True  # 基线样本不足时不启用（fail-open）
+        win = self.reversal_prev_window
+        if vol_dq[-win] == vol_dq[-1] == 0:
+            return True
+        vol_recent = sum(vol_dq[-win:]) / win
+        vol_base = sum(vol_dq[-need:]) / need
+        oi_recent = sum(oi_dq[-win:]) / win
+        oi_base = sum(oi_dq[-need:]) / need
+        if self.reversal_prev_vol_gate and vol_base > 0:
+            if vol_recent / vol_base > self.reversal_prev_vol_ratio_max:
+                return False
+        if self.reversal_prev_oi_gate and oi_base > 0:
+            if oi_recent / oi_base > self.reversal_prev_oi_ratio_max:
+                return False
+        return True
 
     def hybrid_backtest(self,
                         bar_1m_exec_df: DataFrame,
@@ -581,6 +668,16 @@ class TrixVptResearch(PandasBacktestingBase):
 
         ## sar（前一日口径：T-1 收盘后的 SAR 趋势，+1 上涨趋势 / -1 下跌趋势）
         daily_sar_trend_arr = bar_1m_exec_df["daily_sar_trend"].to_numpy()
+
+        ## 均线束反转搏击单的确认：T-1 ccl_type（价格方向 × 增减仓四象限）
+        daily_ccl_type_arr = bar_1m_exec_df["daily_ccl_type"].to_numpy()
+
+        ## 反转搏击单的结构位止损参考：T-1 近期 7 日高低点
+        daily_short_channel_high_arr = bar_1m_exec_df["daily_short_channel_high"].to_numpy()
+        daily_short_channel_low_arr = bar_1m_exec_df["daily_short_channel_low"].to_numpy()
+
+        ## 贴近极值锚：T-1 的 60 日高/低点（extreme window）与收盘
+        daily_close_arr = bar_1m_exec_df["close"].to_numpy()
 
         ## true gap
         daily_prev_true_gap_up_pct_arr = bar_1m_exec_df["daily_true_gap_up_pct"].to_numpy()
@@ -649,6 +746,33 @@ class TrixVptResearch(PandasBacktestingBase):
         open_memory: dict[date, bool] = {}
         last_trading_date = None
 
+        ## 前 N 日量仓综合门：按交易日的总量/最后持仓（deque 以“日”为单位）
+        self._gate_day_volume = 0.0
+        self._gate_day_last_oi = None
+        self._gate_day_date = None
+        self._gate_volume_deque = deque(maxlen=max(self.reversal_prev_base_window + 2, 20))
+        self._gate_oi_deque = deque(maxlen=max(self.reversal_prev_base_window + 2, 20))
+
+        # v85：预填——exec_df 首个交易日之前的门历史从完整日线序列补齐，
+        # 消除"门的喂入起点被 strict dropna 推迟"导致的 fail-open 不对称。
+        first_exec_date = trading_date_arr[0]
+        try:
+            first_exec_date = pd.Timestamp(first_exec_date).date()
+        except Exception:
+            first_exec_date = first_exec_date
+        if getattr(self, "_gate_daily_feed", None):
+            for feed_date, feed_vol, feed_oi in self._gate_daily_feed:
+                try:
+                    feed_d = pd.Timestamp(feed_date).date()
+                except Exception:
+                    feed_d = feed_date
+                if feed_d >= first_exec_date:
+                    continue  # exec_df 起步后的天数仍由循环内收口喂入
+                self._gate_volume_deque.append(feed_vol)
+                self._gate_oi_deque.append(feed_oi)
+        minute_oi_arr = bar_1m_exec_df["open_interest"].to_numpy()
+        minute_volume_arr = bar_1m_exec_df["volume"].to_numpy()
+
         ## 持仓后数据统计
         after_holding_high_bar_index = -1
         after_holding_low_bar_index = -1
@@ -681,6 +805,16 @@ class TrixVptResearch(PandasBacktestingBase):
 
             cur_return_today_open = intraday_return_daily_open_arr[i]
             cur_intraday_bar_index = intraday_bar_index_arr[i]
+
+            # 量仓综合门状态：新交易日首根先收口上一交易日总量/最后持仓
+            if self._gate_day_date != cur_trading_date:
+                if self._gate_day_date is not None:
+                    self._gate_volume_deque.append(self._gate_day_volume)
+                    self._gate_oi_deque.append(self._gate_day_last_oi)
+                self._gate_day_date = cur_trading_date
+                self._gate_day_volume = 0.0
+            self._gate_day_volume += minute_volume_arr[i]
+            self._gate_day_last_oi = minute_oi_arr[i]
 
             cur_is_channel_compression = daily_is_channel_compression_arr[i]
             cur_channel_high = daily_channel_high_arr[i]
@@ -721,6 +855,11 @@ class TrixVptResearch(PandasBacktestingBase):
                     and daily_ema_long_bull_days_arr[i] >= 3
                     and daily_sar_trend_arr[i] == 1
             )
+            # 贴近极值的首次结构破位反转（不等三线穿越 EMA40 的滞后确认）：
+            # - 距 60 日极值 ≤ K×ATR（ATR 归一化：低波动品种自动收紧，高波动品种自动放宽；
+            #   实证：亏损单入场时已从极值走了 20.7%，盈利单 13.7%——晚入场即追单）
+            # - close 击穿 7 日低点（做空）/ 突破 7 日高点（做多）
+            # - SAR 趋势同向（快反转确认；实证盈利单 SAR 平均已翻 11.1 天）
             channel_can_open_short_condition = (
                     cur_is_channel_compression
                     and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
@@ -731,19 +870,24 @@ class TrixVptResearch(PandasBacktestingBase):
                     and daily_ema_long_bear_days_arr[i] >= 3
                     and daily_sar_trend_arr[i] == -1
             )
-
-            # 均线束穿越 EMA40 入场路径：前一交易日收盘后确认"首穿 + 对侧片段周期 >= 阈值"，今日盘中执行
-            ema_pack_can_open_long_condition = (
-                    self.ema_pack_state.breakup_today
-                    and cur_can_open_long
-                    and cur_intraday_bar_index >= 30
-                    and daily_sar_trend_arr[i] == 1
-            )
+            retrace_distance_high = daily_extreme_window_high_arr[i] - daily_close_arr[i]
             ema_pack_can_open_short_condition = (
-                    self.ema_pack_state.breakdown_today
+                    daily_sar_trend_arr[i] == -1
+                    and retrace_distance_high <= self.reversal_retrace_atr_mult * cur_daily_atr_14
+                    and cur_close < daily_short_channel_low_arr[i]
                     and cur_can_open_short
                     and cur_intraday_bar_index >= 30
-                    and daily_sar_trend_arr[i] == -1
+                    and self._prev_days_gates_pass()
+            )
+
+            retrace_distance_low = daily_close_arr[i] - daily_extreme_window_low_arr[i]
+            ema_pack_can_open_long_condition = (
+                    daily_sar_trend_arr[i] == 1
+                    and retrace_distance_low <= self.reversal_retrace_atr_mult * cur_daily_atr_14
+                    and cur_close > daily_short_channel_high_arr[i]
+                    and cur_can_open_long
+                    and cur_intraday_bar_index >= 30
+                    and self._prev_days_gates_pass()
             )
 
             if cur_position is None or cur_position.volume == 0:
@@ -758,12 +902,13 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
                         continue
 
-                    # 压缩突破路径：止损 max(通道低点, 入场价 - 2*ATR)；均线束路径：止损 入场价 - 2*ATR
+                    # 通道压缩路径：止损 max(通道低点, 入场价 - 2*ATR)（v56 原口径）；
+                    # 反转搏击路径：结构位小止损 = 近期低点 - N*tick（打穿结构位 = 反转失败即离场）
                     if channel_can_open_long_condition:
                         stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                         open_reason = "channel_condition"
                     else:
-                        stop_loss = cur_close - cur_daily_atr_14 * self.stop_loss_multiplier
+                        stop_loss = daily_short_channel_low_arr[i] - self.stop_loss_ticks * self.price_tick
                         open_reason = "ema_condition"
 
                     take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
@@ -792,12 +937,13 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
                         continue
 
-                    # 压缩突破路径：止损 min(通道高点, 入场价 + 2*ATR)；均线束路径：止损 入场价 + 2*ATR
+                    # 通道压缩路径：止损 min(通道高点, 入场价 + 2*ATR)（v56 原口径）；
+                    # 反转搏击路径：结构位小止损 = 近期高点 + N*tick
                     if channel_can_open_short_condition:
                         stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                         open_reason = "channel_condition"
                     else:
-                        stop_loss = cur_close + cur_daily_atr_14 * self.stop_loss_multiplier
+                        stop_loss = daily_short_channel_high_arr[i] + self.stop_loss_ticks * self.price_tick
                         open_reason = "ema_condition"
 
                     take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
@@ -1363,7 +1509,10 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         filename,
         version
     )
+    test_start = perf_counter()
+    product_timings: list[tuple[str, float]] = []
     for product in backtest_product_list:
+        product_start = perf_counter()
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
@@ -1395,10 +1544,17 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
             exit(0)
+        product_timings.append((product, perf_counter() - product_start))
+        print(f"[TIMING] {product} 品种回测耗时: {perf_counter() - product_start:.1f}s")
 
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
     backtesting_overall_stat.analyze_trade_to_excel_file()
+
+    print(f"[TIMING] {backtesting_allow_trade_direction.value} 各品种耗时汇总:")
+    for pname, secs in product_timings:
+        print(f"[TIMING]     {pname:6}: {secs:.1f}s")
+    print(f"[TIMING] test_jq 全程耗时: {perf_counter() - test_start:.1f}s")
 
 
 if __name__ == '__main__':

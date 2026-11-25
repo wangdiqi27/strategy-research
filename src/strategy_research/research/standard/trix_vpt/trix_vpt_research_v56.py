@@ -1,4 +1,5 @@
 import re
+from time import perf_counter
 import traceback
 from datetime import time, date
 from pathlib import Path
@@ -51,7 +52,6 @@ class TrixVptResearch(PandasBacktestingBase):
                  ema_pack_max_mixed_gap_days: int | None = None,
                  extreme_lookback: int = 60,
                  max_extreme_distance_pct: float = 0.5,
-                 stop_loss_ticks: int = 1,
                  sar_af_start: float = 0.02,
                  sar_af_step: float = 0.02,
                  sar_af_max: float = 0.2, ):
@@ -89,14 +89,6 @@ class TrixVptResearch(PandasBacktestingBase):
 
         self.extreme_lookback = extreme_lookback
         self.max_extreme_distance_pct = max_extreme_distance_pct
-
-        # 均线束反转搏击单的确认与止损（v72）：
-        # - 方向一致性门：信号日 ccl_type 极性与注单方向须一致（收盘价方向confirm）；
-        #   盈亏分解：盈利单 8/9 方向一致，亏损单 12 笔中 5 笔方向相反（信号日反向 = '
-        #   回踩噪声首穿'）；放量门经验证为负贡献（放量反转单更易亏损），弃用
-        # - 反转搏击单用结构位小止损：近期 7 日高低点 ± N tick（打结构位 = 反转失败即离场），
-        #   通道压缩路径仍保持 v56 的入场价 ± 2ATR 止损
-        self.stop_loss_ticks = stop_loss_ticks
 
         self.sar_af_start = sar_af_start
         self.sar_af_step = sar_af_step
@@ -591,13 +583,6 @@ class TrixVptResearch(PandasBacktestingBase):
         ## sar（前一日口径：T-1 收盘后的 SAR 趋势，+1 上涨趋势 / -1 下跌趋势）
         daily_sar_trend_arr = bar_1m_exec_df["daily_sar_trend"].to_numpy()
 
-        ## 均线束反转搏击单的确认：T-1 ccl_type（价格方向 × 增减仓四象限）
-        daily_ccl_type_arr = bar_1m_exec_df["daily_ccl_type"].to_numpy()
-
-        ## 反转搏击单的结构位止损参考：T-1 近期 7 日高低点
-        daily_short_channel_high_arr = bar_1m_exec_df["daily_short_channel_high"].to_numpy()
-        daily_short_channel_low_arr = bar_1m_exec_df["daily_short_channel_low"].to_numpy()
-
         ## true gap
         daily_prev_true_gap_up_pct_arr = bar_1m_exec_df["daily_true_gap_up_pct"].to_numpy()
         daily_prev_true_gap_down_pct_arr = bar_1m_exec_df["daily_true_gap_down_pct"].to_numpy()
@@ -737,14 +722,6 @@ class TrixVptResearch(PandasBacktestingBase):
                     and daily_ema_long_bull_days_arr[i] >= 3
                     and daily_sar_trend_arr[i] == 1
             )
-            ccl_type_cur = daily_ccl_type_arr[i]
-            ema_pack_can_open_long_condition = (
-                    self.ema_pack_state.breakup_today
-                    and cur_can_open_long
-                    and cur_intraday_bar_index >= 30
-                    and daily_sar_trend_arr[i] == 1
-                    and ccl_type_cur in ("LONG_OPEN", "SHORT_CLOSE")
-            )
             channel_can_open_short_condition = (
                     cur_is_channel_compression
                     and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
@@ -755,12 +732,19 @@ class TrixVptResearch(PandasBacktestingBase):
                     and daily_ema_long_bear_days_arr[i] >= 3
                     and daily_sar_trend_arr[i] == -1
             )
+
+            # 均线束穿越 EMA40 入场路径：前一交易日收盘后确认"首穿 + 对侧片段周期 >= 阈值"，今日盘中执行
+            ema_pack_can_open_long_condition = (
+                    self.ema_pack_state.breakup_today
+                    and cur_can_open_long
+                    and cur_intraday_bar_index >= 30
+                    and daily_sar_trend_arr[i] == 1
+            )
             ema_pack_can_open_short_condition = (
                     self.ema_pack_state.breakdown_today
                     and cur_can_open_short
                     and cur_intraday_bar_index >= 30
                     and daily_sar_trend_arr[i] == -1
-                    and ccl_type_cur in ("SHORT_OPEN", "LONG_CLOSE")
             )
 
             if cur_position is None or cur_position.volume == 0:
@@ -775,13 +759,12 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
                         continue
 
-                    # 通道压缩路径：止损 max(通道低点, 入场价 - 2*ATR)（v56 原口径）；
-                    # 反转搏击路径：结构位小止损 = 近期低点 - N*tick（打穿结构位 = 反转失败即离场）
+                    # 压缩突破路径：止损 max(通道低点, 入场价 - 2*ATR)；均线束路径：止损 入场价 - 2*ATR
                     if channel_can_open_long_condition:
                         stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                         open_reason = "channel_condition"
                     else:
-                        stop_loss = daily_short_channel_low_arr[i] - self.stop_loss_ticks * self.price_tick
+                        stop_loss = cur_close - cur_daily_atr_14 * self.stop_loss_multiplier
                         open_reason = "ema_condition"
 
                     take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
@@ -810,13 +793,12 @@ class TrixVptResearch(PandasBacktestingBase):
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
                         continue
 
-                    # 通道压缩路径：止损 min(通道高点, 入场价 + 2*ATR)（v56 原口径）；
-                    # 反转搏击路径：结构位小止损 = 近期高点 + N*tick
+                    # 压缩突破路径：止损 min(通道高点, 入场价 + 2*ATR)；均线束路径：止损 入场价 + 2*ATR
                     if channel_can_open_short_condition:
                         stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                         open_reason = "channel_condition"
                     else:
-                        stop_loss = daily_short_channel_high_arr[i] + self.stop_loss_ticks * self.price_tick
+                        stop_loss = cur_close + cur_daily_atr_14 * self.stop_loss_multiplier
                         open_reason = "ema_condition"
 
                     take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
@@ -1382,7 +1364,10 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         filename,
         version
     )
+    test_start = perf_counter()
+    product_timings: list[tuple[str, float]] = []
     for product in backtest_product_list:
+        product_start = perf_counter()
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
@@ -1414,10 +1399,17 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
             exit(0)
+        product_timings.append((product, perf_counter() - product_start))
+        print(f"[TIMING] {product} 品种回测耗时: {perf_counter() - product_start:.1f}s")
 
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
     backtesting_overall_stat.analyze_trade_to_excel_file()
+
+    print(f"[TIMING] {backtesting_allow_trade_direction.value} 各品种耗时汇总:")
+    for pname, secs in product_timings:
+        print(f"[TIMING]     {pname:6}: {secs:.1f}s")
+    print(f"[TIMING] test_jq 全程耗时: {perf_counter() - test_start:.1f}s")
 
 
 if __name__ == '__main__':

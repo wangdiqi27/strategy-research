@@ -1,7 +1,7 @@
 import re
+from time import perf_counter
 import traceback
-from collections import deque
-from datetime import time, date
+from datetime import time
 from pathlib import Path
 
 import numpy as np
@@ -12,21 +12,17 @@ from plotly.subplots import make_subplots
 
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.figure import COLOR_BAR_UP, COLOR_BAR_DOWN, COLOR_WHITE, COLOR_YELLOW
-from strategy_research.factor.momentum import calc_trix, calc_macd
-from strategy_research.factor.ema_pack import EmaPackCrossStateMachine
-from strategy_research.factor.parabolic_sar import calc_sar
-from strategy_research.factor.volume_price import calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
 from strategy_research.backtesting.pandas_backtesting_base_v2 import PandasBacktestingBaseV2
-from strategy_research.tool.data import KLineTool, BarDataManager
+from strategy_research.tool.data import BarDataManager
 
 
 from strategy_research.factor.cross_trend_streaming import (
     DailyStatManager, RangeBreakoutStat, EmaPackCrossStat, AtrStat, TrueGapStat,
     KLineStat, TrixStat, ExtremeWindowStat, IntradayStat, SarStat, CclStat,
-    ShortChannelStat, VolumeOITrendGateStat)
-from vnpy.trader.constant import Exchange, Interval
+    ShortChannelStat)
+from vnpy.trader.constant import Exchange
 from vnpy.trader.object import BarData
 
 
@@ -173,8 +169,6 @@ class TrixVptResearch(PandasBacktestingBaseV2):
         extreme = ExtremeWindowStat(self.extreme_lookback)
         sar = SarStat(self.sar_af_start, self.sar_af_step, self.sar_af_max)
         short_ch = ShortChannelStat()
-        gate = VolumeOITrendGateStat(self.reversal_prev_window, self.reversal_prev_base_window,
-                                     self.reversal_prev_vol_ratio_max, self.reversal_prev_oi_ratio_max)
 
         # 保留与 trowel 策略同名的引用（交易逻辑可读）
         self.daily_stat_manager = manager
@@ -188,11 +182,10 @@ class TrixVptResearch(PandasBacktestingBaseV2):
         self.daily_price_extreme_window_stat = extreme
         self.daily_sar_stat = sar
         self.daily_short_channel_stat = short_ch
-        self.daily_volume_oi_gate_stat = gate
         self.intraday_stat: IntradayStat | None = None
 
         self.daily_stats = [atr, channel, ema, trix, ccl, true_gap, kline,
-                            extreme, sar, short_ch, gate]
+                            extreme, sar, short_ch]
         # 就绪判定 = v85 strict 绑定列（60 日滚动族；通道压缩不参与绑定，
         # 其预热期 None 的 falsy 对应研究版 NaN 比较的 False 伪影）
         self.readiness_checks = [
@@ -311,26 +304,26 @@ class TrixVptResearch(PandasBacktestingBaseV2):
                 and self.daily_ema_pack_stat.ema_long_bear_days >= 3
                 and self.daily_sar_stat.sar_trend == -1
         )
-        retrace_distance_high = self.daily_price_extreme_window_stat.extreme_window_high - cur_close
-        ema_pack_can_open_short_condition = (
-                self.daily_sar_stat.sar_trend == -1
-                and retrace_distance_high <= self.reversal_retrace_atr_mult * cur_daily_atr_14
-                and cur_close < self.daily_short_channel_stat.short_channel_low
-                and cur_can_open_short
-                and cur_intraday_bar_index >= 30
-                and self.daily_volume_oi_gate_stat.gates_pass()
-        )
 
-        retrace_distance_low = cur_close - self.daily_price_extreme_window_stat.extreme_window_low
+        # 均线束穿越 EMA40 入场路径（v56 口径：状态机"首穿 + 对侧片段 >= 阈值"
+        # 事件，min_regime_days 已编码在 EmaPackCrossStat 构造参数中；今日盘中执行）
+        # v93：+ CCL 方向一致性门（v72 口径：信号日 ccl_type 四象限极性与
+        # 注单方向一致——T-1 收线值，流式统计状态同源）
+        ccl_type_cur = self.daily_ccl_stat.ccl_type
         ema_pack_can_open_long_condition = (
-                self.daily_sar_stat.sar_trend == 1
-                and retrace_distance_low <= self.reversal_retrace_atr_mult * cur_daily_atr_14
-                and cur_close > self.daily_short_channel_stat.short_channel_high
+                self.daily_ema_pack_stat.breakup_today
                 and cur_can_open_long
                 and cur_intraday_bar_index >= 30
-                and self.daily_volume_oi_gate_stat.gates_pass()
+                and self.daily_sar_stat.sar_trend == 1
+                and ccl_type_cur in ("LONG_OPEN", "SHORT_CLOSE")
         )
-
+        ema_pack_can_open_short_condition = (
+                self.daily_ema_pack_stat.breakdown_today
+                and cur_can_open_short
+                and cur_intraday_bar_index >= 30
+                and self.daily_sar_stat.sar_trend == -1
+                and ccl_type_cur in ("SHORT_OPEN", "LONG_CLOSE")
+        )
         if cur_position is None or cur_position.volume == 0:
             """开仓检查"""
             has_memory = self.open_memory.get(cur_trading_date, False)
@@ -339,12 +332,12 @@ class TrixVptResearch(PandasBacktestingBaseV2):
 
             open_reason = ""
             if channel_can_open_long_condition or ema_pack_can_open_long_condition:
-                """多头开仓"""
+                """多头开仓（v92：通道压缩 + 均线束穿越双路径，v56 口径）"""
                 if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
                     return  # （v85 循环语境为 continue：跳过本 bar 剩余逻辑）
 
-                # 通道压缩路径：止损 max(通道低点, 入场价 - 2*ATR)（v56 原口径）；
-                # 反转搏击路径：结构位小止损 = 近期低点 - N*tick（打穿结构位 = 反转失败即离场）
+                # 通道压缩路径：止损 max(通道低点, 入场价 - 2*ATR)；
+                # 均线束路径（v72 口径）：结构位止损 = 近 7 日低点 - N*tick
                 if channel_can_open_long_condition:
                     stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                     open_reason = "channel_condition"
@@ -374,12 +367,12 @@ class TrixVptResearch(PandasBacktestingBaseV2):
                 self.open_memory[cur_trading_date] = True
 
             elif channel_can_open_short_condition or ema_pack_can_open_short_condition:
-                """空头开仓"""
+                """空头开仓（v92：通道压缩 + 均线束穿越双路径，v56 口径）"""
                 if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
                     return  # （v85 循环语境为 continue：跳过本 bar 剩余逻辑）
 
-                # 通道压缩路径：止损 min(通道高点, 入场价 + 2*ATR)（v56 原口径）；
-                # 反转搏击路径：结构位小止损 = 近期高点 + N*tick
+                # 通道压缩路径：止损 min(通道高点, 入场价 + 2*ATR)；
+                # 均线束路径（v72 口径）：结构位止损 = 近 7 日高点 + N*tick
                 if channel_can_open_short_condition:
                     stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                     open_reason = "channel_condition"
@@ -935,7 +928,7 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         raise Exception(f"filename does not standardize {filename}")
 
     report_root_dir = "factor-report"
-    factor_name = "TRIX-VPT"
+    factor_name = "cross_trend"
     bar_period = "1m"
     initial_capital = 100_0000
     backtest_product_list = G_BACKTEST_PRODUCT_LIST
@@ -947,7 +940,10 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         filename,
         version
     )
+    test_start = perf_counter()
+    product_timings: list[tuple[str, float]] = []
     for product in backtest_product_list:
+        product_start = perf_counter()
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
@@ -979,10 +975,17 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         except Exception as e:
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
             exit(0)
+        product_timings.append((product, perf_counter() - product_start))
+        print(f"[TIMING] {product} 品种回测耗时: {perf_counter() - product_start:.1f}s")
 
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
     backtesting_overall_stat.analyze_trade_to_excel_file()
+
+    print(f"[TIMING] {backtesting_allow_trade_direction.value} 各品种耗时汇总:")
+    for pname, secs in product_timings:
+        print(f"[TIMING]     {pname:6}: {secs:.1f}s")
+    print(f"[TIMING] test_jq 全程耗时: {perf_counter() - test_start:.1f}s")
 
 
 if __name__ == '__main__':
