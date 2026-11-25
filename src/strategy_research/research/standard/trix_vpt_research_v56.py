@@ -12,6 +12,8 @@ from plotly.subplots import make_subplots
 from strategy_research.config.backtesting import G_BACKTEST_PRODUCT_LIST
 from strategy_research.config.figure import COLOR_BAR_UP, COLOR_BAR_DOWN, COLOR_WHITE, COLOR_YELLOW
 from strategy_research.factor.momentum import calc_trix, calc_macd
+from strategy_research.factor.ema_pack import EmaPackCrossStateMachine
+from strategy_research.factor.parabolic_sar import calc_sar
 from strategy_research.factor.volume_price import calc_ccl
 from strategy_research.backtesting.object import BacktestingDirection, BacktestingOverallStatistics, \
     BacktestingAllowTradeDirection
@@ -44,7 +46,14 @@ class TrixVptResearch(PandasBacktestingBase):
                  trix_ma_period: int = 9,
                  trix_z_score_threshold: float = 0.5,
                  vpt_ma_period: int = 14,
-                 vpt_z_score_threshold: float = 1.5, ):
+                 vpt_z_score_threshold: float = 1.5,
+                 ema_pack_min_regime_days: int = 30,
+                 ema_pack_max_mixed_gap_days: int | None = None,
+                 extreme_lookback: int = 60,
+                 max_extreme_distance_pct: float = 0.5,
+                 sar_af_start: float = 0.02,
+                 sar_af_step: float = 0.02,
+                 sar_af_max: float = 0.2, ):
         super().__init__(factor_name,
                          version,
                          symbol,
@@ -71,6 +80,19 @@ class TrixVptResearch(PandasBacktestingBase):
         self.vpt_ma_period = vpt_ma_period
         self.vpt_z_score_threshold = vpt_z_score_threshold
 
+        self.ema_pack_min_regime_days = ema_pack_min_regime_days
+        self.ema_pack_max_mixed_gap_days = ema_pack_max_mixed_gap_days
+
+        self.ema_pack_state = EmaPackCrossStateMachine(self.ema_pack_min_regime_days,
+                                                       self.ema_pack_max_mixed_gap_days)
+
+        self.extreme_lookback = extreme_lookback
+        self.max_extreme_distance_pct = max_extreme_distance_pct
+
+        self.sar_af_start = sar_af_start
+        self.sar_af_step = sar_af_step
+        self.sar_af_max = sar_af_max
+
     @property
     def parameters(self):
         skip_field = [""]
@@ -87,6 +109,10 @@ class TrixVptResearch(PandasBacktestingBase):
                                         self.trix_ma_period, )
         daily_signal_bar_df = calc_macd(daily_signal_bar_df)
         daily_signal_bar_df = calc_ccl(daily_signal_bar_df)
+        daily_signal_bar_df = calc_sar(daily_signal_bar_df,
+                                       self.sar_af_start,
+                                       self.sar_af_step,
+                                       self.sar_af_max)
         daily_signal_bar_df = daily_signal_bar_df.assign(
             # tr
             tr=lambda x: np.maximum(
@@ -160,6 +186,10 @@ class TrixVptResearch(PandasBacktestingBase):
             short_channel_high=lambda x: x["high"].rolling(7).max(),
             short_channel_low=lambda x: x["low"].rolling(7).min(),
 
+            # 长窗口极值（用于"距极值入场过滤"：追高/追跌过滤）
+            extreme_window_high=lambda x: x["high"].rolling(self.extreme_lookback).max(),
+            extreme_window_low=lambda x: x["low"].rolling(self.extreme_lookback).min(),
+
             # trix
             trix_hist=lambda x: x['trix'] - x['trix_signal'],
             prev_trix_hist=lambda x: x['trix_hist'].shift(1),
@@ -184,17 +214,18 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
         )
 
-        # 计算 TRIX 正负持续天数
-        is_trix_hist_pos = daily_signal_bar_df['trix'] > 0
-        is_trix_hist_neg = daily_signal_bar_df['trix'] < 0
-        # is_trix_hist_pos = daily_signal_bar_df['trix_hist'] > 0
-        # is_trix_hist_neg = daily_signal_bar_df['trix_hist'] < 0
+        # 计算 TRIX 正负持续天数 #
+        # is_trix_hist_pos = daily_signal_bar_df['trix'] > 0
+        # is_trix_hist_neg = daily_signal_bar_df['trix'] < 0
+        is_trix_hist_pos = daily_signal_bar_df['trix_hist'] > 0
+        is_trix_hist_neg = daily_signal_bar_df['trix_hist'] < 0
         pos_group = (is_trix_hist_pos != is_trix_hist_pos.shift(1)).cumsum()
         daily_signal_bar_df['trix_pos_days'] = is_trix_hist_pos.groupby(pos_group).cumsum()
         neg_group = (is_trix_hist_neg != is_trix_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['trix_neg_days'] = is_trix_hist_neg.groupby(neg_group).cumsum()
+        ####################################################################################
 
-        # 计算 MACD 正负持续天数
+        # 计算 MACD 正负持续天数 #
         # is_macd_hist_pos = daily_signal_bar_df['macd_diff'] > 0
         # is_macd_hist_neg = daily_signal_bar_df['macd_diff'] < 0
         is_macd_hist_pos = daily_signal_bar_df['macd_hist'] > 0
@@ -203,6 +234,18 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_signal_bar_df['macd_pos_days'] = is_macd_hist_pos.groupby(pos_group).cumsum()
         neg_group = (is_macd_hist_neg != is_macd_hist_neg.shift(1)).cumsum()
         daily_signal_bar_df['macd_neg_days'] = is_macd_hist_neg.groupby(neg_group).cumsum()
+        ####################################################################################
+
+        # 计算 EMA 多头排列、空头排列天数 #
+        ema_long_bull = (daily_signal_bar_df['ema_5'] > daily_signal_bar_df['ema_10']) & (
+                daily_signal_bar_df['ema_10'] > daily_signal_bar_df['ema_20'])
+        ema_long_bear = (daily_signal_bar_df['ema_5'] < daily_signal_bar_df['ema_10']) & (
+                daily_signal_bar_df['ema_10'] < daily_signal_bar_df['ema_20'])
+        group_id = (ema_long_bull != ema_long_bull.shift(1)).cumsum()
+        daily_signal_bar_df['ema_long_bull_days'] = ema_long_bull.groupby(group_id).cumsum()
+        group_id = (ema_long_bear != ema_long_bear.shift(1)).cumsum()
+        daily_signal_bar_df['ema_long_bear_days'] = ema_long_bear.groupby(group_id).cumsum()
+        ####################################################################################
 
         daily_exec_bar_df = daily_signal_bar_df.assign(
             # atr
@@ -241,14 +284,24 @@ class TrixVptResearch(PandasBacktestingBase):
             ema_20=daily_signal_bar_df['ema_20'].shift(1),
             ema_40=daily_signal_bar_df['ema_40'].shift(1),
             ema_60=daily_signal_bar_df['ema_60'].shift(1),
+            ema_long_bull_days=daily_signal_bar_df['ema_long_bull_days'].shift(1),
+            ema_long_bear_days=daily_signal_bar_df['ema_long_bear_days'].shift(1),
 
             # channel
             channel_high=daily_signal_bar_df["channel_high"].shift(1),
             channel_low=daily_signal_bar_df["channel_low"].shift(1),
             is_channel_compression=daily_signal_bar_df["is_channel_compression"].shift(1),
 
+            # 长窗口极值（前一日口径）
+            extreme_window_high=daily_signal_bar_df["extreme_window_high"].shift(1),
+            extreme_window_low=daily_signal_bar_df["extreme_window_low"].shift(1),
+
             short_channel_high=daily_signal_bar_df["short_channel_high"].shift(1),
             short_channel_low=daily_signal_bar_df["short_channel_low"].shift(1),
+
+            # sar（前一日口径：T-1 收盘后的 SAR 趋势状态）
+            sar=daily_signal_bar_df["sar"].shift(1),
+            sar_trend=daily_signal_bar_df["sar_trend"].shift(1),
 
             # trix
             trix=daily_signal_bar_df["trix"].shift(1),
@@ -314,14 +367,22 @@ class TrixVptResearch(PandasBacktestingBase):
             "ema_20",
             "ema_40",
             "ema_60",
+            "ema_long_bull_days",
+            "ema_long_bear_days",
 
             # channel
             "channel_high",
             "channel_low",
             "is_channel_compression",
+            "extreme_window_high",
+            "extreme_window_low",
 
             "short_channel_high",
             "short_channel_low",
+
+            # sar
+            "sar",
+            "sar_trend",
 
             # trix
             "trix",
@@ -364,14 +425,22 @@ class TrixVptResearch(PandasBacktestingBase):
             "ema_20",
             "ema_40",
             "ema_60",
+            "ema_long_bull_days",
+            "ema_long_bear_days",
 
             # channel
             "channel_high",
             "channel_low",
             "is_channel_compression",
+            "extreme_window_high",
+            "extreme_window_low",
 
             "short_channel_high",
             "short_channel_low",
+
+            # sar
+            "sar",
+            "sar_trend",
 
             # trix
             "trix",
@@ -506,6 +575,13 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_channel_low_arr = bar_1m_exec_df['daily_channel_low'].to_numpy()
         daily_is_channel_compression_arr = bar_1m_exec_df['daily_is_channel_compression'].to_numpy()
 
+        ## 长窗口极值（前一日口径）
+        daily_extreme_window_high_arr = bar_1m_exec_df["daily_extreme_window_high"].to_numpy()
+        daily_extreme_window_low_arr = bar_1m_exec_df["daily_extreme_window_low"].to_numpy()
+
+        ## sar（前一日口径：T-1 收盘后的 SAR 趋势，+1 上涨趋势 / -1 下跌趋势）
+        daily_sar_trend_arr = bar_1m_exec_df["daily_sar_trend"].to_numpy()
+
         ## true gap
         daily_prev_true_gap_up_pct_arr = bar_1m_exec_df["daily_true_gap_up_pct"].to_numpy()
         daily_prev_true_gap_down_pct_arr = bar_1m_exec_df["daily_true_gap_down_pct"].to_numpy()
@@ -533,6 +609,9 @@ class TrixVptResearch(PandasBacktestingBase):
         daily_ema5_arr = bar_1m_exec_df["daily_ema_5"].to_numpy()
         daily_ema10_arr = bar_1m_exec_df["daily_ema_10"].to_numpy()
         daily_ema20_arr = bar_1m_exec_df["daily_ema_20"].to_numpy()
+        daily_ema40_arr = bar_1m_exec_df["daily_ema_40"].to_numpy()
+        daily_ema_long_bull_days_arr = bar_1m_exec_df["daily_ema_long_bull_days"].to_numpy()
+        daily_ema_long_bear_days_arr = bar_1m_exec_df["daily_ema_long_bear_days"].to_numpy()
 
         # 分钟级指标
 
@@ -588,6 +667,12 @@ class TrixVptResearch(PandasBacktestingBase):
                 # 上一个交易日设置成当前的交易日
                 last_trading_date = cur_trading_date
 
+                # 均线束状态机推进：每个交易日一次（数据显示的是此前一日收盘后的三线状态，无未来数据）
+                self.ema_pack_state.on_new_trading_day(daily_ema5_arr[i],
+                                                       daily_ema10_arr[i],
+                                                       daily_ema20_arr[i],
+                                                       daily_ema40_arr[i])
+
             # cur_position = self.account.get_position(self.symbol)
             cur_position = self.account.get_position_v2()
             cur_datetime = datetime_arr[i]
@@ -607,6 +692,11 @@ class TrixVptResearch(PandasBacktestingBase):
 
             # 最新价更新
             cur_close = minute_close_arr[i]
+
+            # 距极值入场过滤（前一日口径的 60 日高低点）：
+            # 做多：距 60 日低点涨幅达到阈值 → 放弃追多；做空：距 60 日高点跌幅达到阈值 → 放弃追空
+            cur_can_open_long = cur_close < (daily_extreme_window_low_arr[i] * (1 + self.max_extreme_distance_pct))
+            cur_can_open_short = cur_close > (daily_extreme_window_high_arr[i] * (1 - self.max_extreme_distance_pct))
             if cur_position:
                 position_bar_data = self._get_contract_bar(cur_position.symbol, cur_datetime)
                 self.account.update_latest_price(cur_position.symbol,
@@ -624,16 +714,36 @@ class TrixVptResearch(PandasBacktestingBase):
             channel_can_open_long_condition = (
                     cur_is_channel_compression
                     and cur_close > (cur_channel_high + 0.1 * cur_daily_atr_14)
+                    and cur_can_open_long
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open > 0
                     and (daily_ema5_arr[i] > daily_ema10_arr[i] > daily_ema20_arr[i])
+                    and daily_ema_long_bull_days_arr[i] >= 3
+                    and daily_sar_trend_arr[i] == 1
             )
             channel_can_open_short_condition = (
                     cur_is_channel_compression
                     and cur_close < (cur_channel_low - 0.1 * cur_daily_atr_14)
+                    and cur_can_open_short
                     and cur_intraday_bar_index >= 30
                     and cur_return_today_open < 0
                     and (daily_ema5_arr[i] < daily_ema10_arr[i] < daily_ema20_arr[i])
+                    and daily_ema_long_bear_days_arr[i] >= 3
+                    and daily_sar_trend_arr[i] == -1
+            )
+
+            # 均线束穿越 EMA40 入场路径：前一交易日收盘后确认"首穿 + 对侧片段周期 >= 阈值"，今日盘中执行
+            ema_pack_can_open_long_condition = (
+                    self.ema_pack_state.breakup_today
+                    and cur_can_open_long
+                    and cur_intraday_bar_index >= 30
+                    and daily_sar_trend_arr[i] == 1
+            )
+            ema_pack_can_open_short_condition = (
+                    self.ema_pack_state.breakdown_today
+                    and cur_can_open_short
+                    and cur_intraday_bar_index >= 30
+                    and daily_sar_trend_arr[i] == -1
             )
 
             if cur_position is None or cur_position.volume == 0:
@@ -643,12 +753,19 @@ class TrixVptResearch(PandasBacktestingBase):
                     continue
 
                 open_reason = ""
-                if channel_can_open_long_condition:
+                if channel_can_open_long_condition or ema_pack_can_open_long_condition:
                     """多头开仓"""
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.SHORT:
                         continue
 
-                    stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
+                    # 压缩突破路径：止损 max(通道低点, 入场价 - 2*ATR)；均线束路径：止损 入场价 - 2*ATR
+                    if channel_can_open_long_condition:
+                        stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
+                        open_reason = "channel_condition"
+                    else:
+                        stop_loss = cur_close - cur_daily_atr_14 * self.stop_loss_multiplier
+                        open_reason = "ema_condition"
+
                     take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
 
                     open_contract_symbol, open_contract_close = self._get_next_major_contract_data(
@@ -670,12 +787,19 @@ class TrixVptResearch(PandasBacktestingBase):
                     after_holding_low_bar_index = i
                     open_memory[cur_trading_date] = True
 
-                elif channel_can_open_short_condition:
+                elif channel_can_open_short_condition or ema_pack_can_open_short_condition:
                     """空头开仓"""
                     if self.allow_trade_direction == BacktestingAllowTradeDirection.LONG:
                         continue
 
-                    stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
+                    # 压缩突破路径：止损 min(通道高点, 入场价 + 2*ATR)；均线束路径：止损 入场价 + 2*ATR
+                    if channel_can_open_short_condition:
+                        stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
+                        open_reason = "channel_condition"
+                    else:
+                        stop_loss = cur_close + cur_daily_atr_14 * self.stop_loss_multiplier
+                        open_reason = "ema_condition"
+
                     take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
 
                     open_contract_symbol, open_contract_close = self._get_next_major_contract_data(
@@ -729,7 +853,7 @@ class TrixVptResearch(PandasBacktestingBase):
                         close_reason = "动态止盈止损"
                     elif intraday_open_gap_down_pct_arr[i] > 0.01:
                         close_reason = "开盘跳空反转"
-                    elif (daily_prev_true_gap_down_pct_arr[i] > 0.01
+                    elif (daily_prev_true_gap_down_pct_arr[i] > 0.005
                           and cur_intraday_bar_index >= 30
                           and cur_return_today_open < 0
                     ):
@@ -737,12 +861,8 @@ class TrixVptResearch(PandasBacktestingBase):
                     elif (daily_prev_is_kline_long_arr[i]
                           and daily_prev_kline_body_ratio_arr[i] >= 0.8
                           and daily_prev_kline_direction_arr[i] == -1
-                            # and cur_intraday_bar_index >= 5
-                            # and cur_return_today_open < 0
                     ):
                         close_reason = "前一根巨型阴线"
-                    # elif cur_close < cur_channel_low:
-                    #     close_reason = '价格低于通道低点'
                     elif (
                             daily_trix_allow_close_long_arr[i]
                             and holding_trading_days >= self.min_required_holding_days
@@ -750,9 +870,6 @@ class TrixVptResearch(PandasBacktestingBase):
                             and daily_trix_neg_days_arr[i] >= 5
                     ):
                         close_reason = 'trix 信号反转平仓'
-                    # elif (daily_zigzag_structure_confirmed_arr[i] == "LH-LL"
-                    #       and cur_close < daily_zigzag_last_high_confirmed_arr[i]):
-                    #     close_reason = "LH-LL 下降结构"
                     elif i == bar_exec_df_copy_length - 1:
                         close_reason = '最后可交易日'
                     elif self._need_switch_contract(cur_datetime, cur_position):
@@ -792,9 +909,12 @@ class TrixVptResearch(PandasBacktestingBase):
 
                             stop_loss = min(cur_channel_high, cur_close + cur_daily_atr_14 * self.stop_loss_multiplier)
                             take_profit = cur_close - cur_daily_atr_14 * self.take_profit_multiplier
+                            reverse_contract_symbol, reverse_contract_close = self._get_next_major_contract_data(
+                                cur_datetime
+                            )
                             self.open_position(
-                                cur_major_contract_symbol,
-                                cur_major_contract_bar["close"],
+                                reverse_contract_symbol,
+                                reverse_contract_close,
                                 BacktestingDirection.SHORT,
                                 "",
                                 cur_datetime,
@@ -818,14 +938,14 @@ class TrixVptResearch(PandasBacktestingBase):
                     if channel_can_open_long_condition:
                         close_reason = '达到开多条件，平仓开多'
                         is_reverse_open = True
-                    if cur_close >= cur_position.stop_loss:
+                    elif cur_close >= cur_position.stop_loss:
                         close_reason = '止损'
                     elif (adjust_stop_loss > 0
                           and cur_close > adjust_stop_loss):
                         close_reason = '动态止盈止损'
                     elif intraday_open_gap_up_pct_arr[i] > 0.01:
                         close_reason = "开盘跳空反转"
-                    elif (daily_prev_true_gap_up_pct_arr[i] > 0.01
+                    elif (daily_prev_true_gap_up_pct_arr[i] > 0.005
                           and cur_intraday_bar_index >= 30
                           and cur_return_today_open > 0
                     ):
@@ -889,9 +1009,12 @@ class TrixVptResearch(PandasBacktestingBase):
 
                             stop_loss = max(cur_channel_low, cur_close - cur_daily_atr_14 * self.stop_loss_multiplier)
                             take_profit = cur_close + cur_daily_atr_14 * self.take_profit_multiplier
+                            reverse_contract_symbol, reverse_contract_close = self._get_next_major_contract_data(
+                                cur_datetime
+                            )
                             self.open_position(
-                                cur_major_contract_symbol,
-                                cur_major_contract_bar["close"],
+                                reverse_contract_symbol,
+                                reverse_contract_close,
                                 BacktestingDirection.LONG,
                                 "",
                                 cur_datetime,
@@ -983,15 +1106,47 @@ class TrixVptResearch(PandasBacktestingBase):
             row=1,
             col=1)
 
-        # EMA60
+        # # EMA60
+        # fig.add_trace(
+        #     go.Scatter(
+        #         x=x_axis,
+        #         y=bar_df['ema_60'],
+        #         mode='lines',
+        #         name='EMA60',
+        #         line=dict(color='#32CD32', width=2.0, dash='dash'),
+        #         hovertemplate='<b>%{x}</b><br>EMA60: %{y:.4f}<extra></extra>'
+        #     ),
+        #     row=1,
+        #     col=1)
+
+    def _plot_indicator_sar(self,
+                            fig: go.Figure,
+                            x_axis: pd.Series,
+                            bar_df: DataFrame):
+        # SAR 点位叠加在 K 线子图：上涨趋势（SAR 在价格下方）红点，下跌趋势（SAR 在价格上方）绿点
+        sar_up_mask = (bar_df['sar_trend'] == 1)
+        sar_down_mask = (bar_df['sar_trend'] == -1)
+
         fig.add_trace(
             go.Scatter(
-                x=x_axis,
-                y=bar_df['ema_60'],
-                mode='lines',
-                name='EMA60',
-                line=dict(color='#32CD32', width=2.0, dash='dash'),
-                hovertemplate='<b>%{x}</b><br>EMA60: %{y:.4f}<extra></extra>'
+                x=x_axis[sar_up_mask],
+                y=bar_df['sar'][sar_up_mask],
+                mode='markers',
+                name='SAR(涨)',
+                marker=dict(color=COLOR_BAR_UP, size=4),
+                hovertemplate='<b>%{x}</b><br>SAR: %{y:.4f}<extra></extra>'
+            ),
+            row=1,
+            col=1)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis[sar_down_mask],
+                y=bar_df['sar'][sar_down_mask],
+                mode='markers',
+                name='SAR(跌)',
+                marker=dict(color=COLOR_BAR_DOWN, size=4),
+                hovertemplate='<b>%{x}</b><br>SAR: %{y:.4f}<extra></extra>'
             ),
             row=1,
             col=1)
@@ -1030,6 +1185,11 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_macd(self,
                              fig: go.Figure,
@@ -1065,6 +1225,12 @@ class TrixVptResearch(PandasBacktestingBase):
             ),
             row=3,
             col=1)
+
+        fig.update_yaxes(zeroline=True,
+                         zerolinecolor='#666666',
+                         zerolinewidth=0.5,
+                         row=3,
+                         col=1)
 
     def _plot_indicator_vol_oi(self,
                                fig: go.Figure,
@@ -1145,6 +1311,11 @@ class TrixVptResearch(PandasBacktestingBase):
                                  datetime_str,
                                  bar_df)
 
+        # SAR
+        self._plot_indicator_sar(fig,
+                                 datetime_str,
+                                 bar_df)
+
         # VOL
         self._plot_indicator_vol_oi(fig,
                                     datetime_str,
@@ -1183,6 +1354,7 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
     factor_name = "TRIX-VPT"
     bar_period = "1m"
     initial_capital = 100_0000
+    backtest_product_list = G_BACKTEST_PRODUCT_LIST
     report_factor_dir = Path(f"{report_root_dir}/{factor_name}/{version}/{backtesting_allow_trade_direction.value}")
     report_factor_dir.mkdir(parents=True, exist_ok=True)
     backtesting_overall_stat = BacktestingOverallStatistics(
@@ -1191,7 +1363,7 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
         filename,
         version
     )
-    for product in G_BACKTEST_PRODUCT_LIST:
+    for product in backtest_product_list:
         report_factor_product_dir = report_factor_dir / product
         report_factor_product_dir.mkdir(parents=True, exist_ok=True)
         symbol = f"{product}JQ00"
@@ -1230,6 +1402,6 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
 
 
 if __name__ == '__main__':
-    test_jq(BacktestingAllowTradeDirection.ALL)
-    # test_jq(BacktestingAllowTradeDirection.LONG)
-    # test_jq(BacktestingAllowTradeDirection.SHORT)
+    test_jq(BacktestingAllowTradeDirection.ALL)  # 本轮 trix 消融分析只运行 ALL 方向
+    test_jq(BacktestingAllowTradeDirection.LONG)  # 本轮 trix 消融分析只运行 ALL 方向
+    test_jq(BacktestingAllowTradeDirection.SHORT)  # 本轮 trix 消融分析只运行 ALL 方向

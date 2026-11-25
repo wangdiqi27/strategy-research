@@ -30,6 +30,8 @@ class PandasBacktestingBase(ABC):
                  enable_debug_mode: bool = False,
                  enable_jq_index_mode: bool = False,
                  allow_trade_direction: BacktestingAllowTradeDirection = BacktestingAllowTradeDirection.ALL,
+                 use_t1_major: bool = True,
+                 filter_auction_bars: bool = True,
                  ):
         self.factor_name = factor_name
         self.version = version
@@ -44,6 +46,18 @@ class PandasBacktestingBase(ABC):
         self.enable_debug_mode = enable_debug_mode
         self.enable_jq_index_mode = enable_jq_index_mode
         self.allow_trade_direction = allow_trade_direction
+        # 主力梯队口径开关：True（默认，2026-11-15 起）= T-1 昨持仓口径
+        #   （对齐 trowel _arrange_contract 的 pre_open_interest 判定，T 日盘中使用
+        #   T-1 收盘 OI 排序的梯队，无未来数据）；
+        # False = 旧口径（交易日 T 用 T 当日收盘 OI 排序，盘中决策含当日收盘信息
+        #   ——当日收盘 OI 判主力属未来数据，定性为 bug，仅历史复现时显式关闭）。
+        self.use_t1_major = use_t1_major
+        # 集合竞价脏 bar 过滤开关（对齐 trowel is_valid_bar_time/is_in_auction 口径）：
+        # True（默认，2026-11-15 起）时在数据进入日线聚合/日内统计/成交撮合之前，
+        # 剔除 8:55-8:59 与 20:55-20:59 窗口的 bar（JQ00 序列与主力合约序列同滤）。
+        # False = 旧口径（竞价脏 bar 参与日线聚合与日内序号，属数据 bug，仅历史复现
+        # 时显式关闭；FG 有 1709 根污染 bar，其余品种 0 根）。
+        self.filter_auction_bars = filter_auction_bars
 
         self.bar_start_datetime: datetime | None = None
         self.bar_end_datetime: datetime | None = None
@@ -110,14 +124,65 @@ class PandasBacktestingBase(ABC):
 
         return last_trading_day
 
+    @staticmethod
+    def _is_auction_bar(dt: datetime) -> bool:
+        """集合竞价窗口判定（与 trowel is_in_auction 完全同口径）"""
+        t = dt.time()
+        from datetime import time as _time
+        return _time(8, 55) <= t < _time(9, 0) or _time(20, 55) <= t < _time(21, 0)
+
+    def _filter_auction_from_df(self, df):
+        if not self.filter_auction_bars:
+            return df
+        mask = df["datetime"].map(self._is_auction_bar)
+        return df[~mask]
+
     def _process_major_contract(self):
+        # t1_shift=False：V1 保留自己的移位实现（受 use_t1_major 开关控制，
+        # 服务历史口径复现）；loader 默认已是 T-1 口径，此处必须显式关掉
+        # 以免双重移位。
         daily_top_n_major_list, symbol_top_n_major_bar_1m_df_dict = BarDataManager.load_product_top_n_major_from_cache(
-            self.product, )
+            self.product, t1_shift=False)
+
+        if self.use_t1_major:
+            # T-1 昨持仓口径：把 {交易日 -> 主力梯队} 的键整体右移一个交易日——
+            # 交易日 T 盘中取到的是"按 T-1 收盘 OI 排序"的梯队（= trowel 侧
+            # FuturesDailyData.pre_open_interest 判主力的等价实现）；
+            # 首个交易日无前驱 → 不设键，_get_major_contract_symbol 返回 None 走跳过分支。
+            #
+            # 2026-11-12 修复：右移后按**日历日**逐日填充键空间——
+            # 周末/节假日的凌晨 bar（calendar date 不在交易日键序列中，
+            # 如周六 07-20 00:18）原会 lookup 到 None → 主力解析失败 →
+            # 整个凌晨段被循环跳过，错失该时段的触发（sc 07-20 00:18 为首例，
+            # trowel 侧 mock 的 _lookup_trading_date 有向后容忍故无此问题）。
+            # 语义：日历日 D 的梯队 = D 之前最近一个交易日（d_i）的右移梯队，
+            # 即 t1_map[D] = original[d_i]——与 trowel 的向后查找完全一致。
+            from datetime import timedelta as _td
+            trading_dates = sorted(daily_top_n_major_list.keys())
+            t1_major_list: dict = {}
+            for i, d in enumerate(trading_dates):
+                if i > 0:
+                    # 交易日 d 自身：T-1 = 前一交易日
+                    t1_major_list[d] = daily_top_n_major_list[trading_dates[i - 1]]
+                # d 与下一交易日之间的日历日（含下一交易日的夜盘凌晨段）：沿用 d 的梯队
+                nxt = trading_dates[i + 1] if i + 1 < len(trading_dates) else d + _td(days=10)
+                fill_date = d + _td(days=1)
+                while fill_date < nxt:
+                    t1_major_list[fill_date] = daily_top_n_major_list[d]
+                    fill_date += _td(days=1)
+            # 末尾交易日之后的日历日沿用最后已知梯队（回测窗口末端的夜盘凌晨段）
+            last_t1 = t1_major_list.get(trading_dates[-1])
+            fill_date = trading_dates[-1] + _td(days=1)
+            while fill_date <= trading_dates[-1] + _td(days=15):
+                t1_major_list.setdefault(fill_date, last_t1)
+                fill_date += _td(days=1)
+            daily_top_n_major_list = t1_major_list
         self._daily_top_n_major_list = daily_top_n_major_list
 
         # 计算1分钟所有合约的最后一条记录是什么时候，使加权指数与之对其
         for symbol in symbol_top_n_major_bar_1m_df_dict:
-            df = symbol_top_n_major_bar_1m_df_dict[symbol]
+            df = self._filter_auction_from_df(symbol_top_n_major_bar_1m_df_dict[symbol])
+            symbol_top_n_major_bar_1m_df_dict[symbol] = df
             if self._last_bar_data_datetime:
                 self._last_bar_data_datetime = max(df["datetime"].iloc[-1], self._last_bar_data_datetime)
             else:
@@ -198,7 +263,11 @@ class PandasBacktestingBase(ABC):
             self._process_major_contract()
             print(f"{'-' * 10} stop loading major contract {'-' * 10}")
 
-        bar_df = self.bar_df
+        # 集合竞价脏 bar 过滤（filter_auction_bars=True 时）：日线聚合、日内序号、
+        # 量仓统计、交易评估全部使用过滤后的序列——与 trowel on_bars 入口过滤同构
+        bar_df = self._filter_auction_from_df(self.bar_df)
+        if self.filter_auction_bars:
+            print(f"{'-' * 10} auction bars filtered: {len(self.bar_df) - len(bar_df)} removed {'-' * 10}")
         print(f"{'-' * 10} start computing indicators {'-' * 10}")
         exec_bar_df, signal_bar_df = self.compute_indicators(bar_df, self.contract_config.trading_session_time)
         self.trading_start_datetime = exec_bar_df['trading_date'].iloc[0]

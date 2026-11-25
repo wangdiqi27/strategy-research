@@ -336,10 +336,47 @@ class BarDataManager:
     @classmethod
     def load_product_top_n_major_from_cache(cls,
                                             product: str,
-                                            top_n: int = 3) -> tuple[dict[datetime, list], dict[str, DataFrame]]:
+                                            top_n: int = 3,
+                                            t1_shift: bool = True,
+                                            ) -> tuple[dict[datetime, list], dict[str, DataFrame]]:
+        """主力梯队数据（含 T-1 昨持仓口径处理）。
+
+        t1_shift=True（默认）：T-1 昨持仓口径——交易日 T 盘中取到的是
+        "按 T-1 收盘 OI 排序"的梯队，对齐实盘 FuturesDailyData.pre_open_interest
+        判定，无未来数据。实现 = 键整体右移一个交易日 + **日历日**填充：
+        - 交易日 d 的梯队 = 前一交易日的梯队；
+        - 交易日 d 与下一交易日之间的日历日（夜盘凌晨段/周末/节假日）沿用 d
+          的梯队（2026-11-12 修复的"周末空洞"语义，与 trowel 的向后查找一致）；
+        - 末尾交易日之后的日历日沿用最后已知梯队（回测窗口末端）。
+        t1_shift=False：原始口径（交易日 T = T 当日收盘 OI 排序，含盘中
+        未来数据），仅供 V1 基类的历史口径复现（use_t1_major=False）。
+        """
         symbol_bar_1d_df = BarDataManager.load_product_from_cache(product, "1d")
         daily_top_n_major_list, all_top_n_symbol_list = ContractTool.get_daily_top_n_major_list(symbol_bar_1d_df,
                                                                                                 top_n)
+
+        if t1_shift:
+            from datetime import timedelta as _td
+            trading_dates = sorted(daily_top_n_major_list.keys())
+            t1_major_list: dict = {}
+            for i, d in enumerate(trading_dates):
+                if i > 0:
+                    # 交易日 d 自身：T-1 = 前一交易日
+                    t1_major_list[d] = daily_top_n_major_list[trading_dates[i - 1]]
+                # d 与下一交易日之间的日历日（含下一交易日的夜盘凌晨段）：沿用 d 的梯队
+                nxt = trading_dates[i + 1] if i + 1 < len(trading_dates) else d + _td(days=10)
+                fill_date = d + _td(days=1)
+                while fill_date < nxt:
+                    t1_major_list[fill_date] = daily_top_n_major_list[d]
+                    fill_date += _td(days=1)
+            # 末尾交易日之后的日历日沿用最后已知梯队（回测窗口末端的夜盘凌晨段）
+            last_t1 = t1_major_list.get(trading_dates[-1])
+            fill_date = trading_dates[-1] + _td(days=1)
+            while fill_date <= trading_dates[-1] + _td(days=15):
+                t1_major_list.setdefault(fill_date, last_t1)
+                fill_date += _td(days=1)
+            daily_top_n_major_list = t1_major_list
+
         symbol_top_n_major_bar_1m_df_dict: dict[str, DataFrame] = {}
         for symbol in all_top_n_symbol_list:
             bar_1m_df = cls.load_symbol_from_cache(symbol, "1m")

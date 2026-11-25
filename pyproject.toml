@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pandas>=3.0.3",
+    "pandas-stubs==3.0.5.260914",
     "plotly>=6.9.0",
+    "types-pandas==2.0.0",
     "vnpy",
     "vnpy-data-ext",
     "xlsxwriter>=3.2.9",

@@ -1,9 +1,0 @@
-{
-  "$schema": "https://opencode.ai/config.json",
-  "references": {
-    "trowel": {
-      "path": "../trowel",
-      "description": "使用 vnpy 量化框架进行开发的实盘策略"
-    }
-  }
-}
