@@ -1419,7 +1419,6 @@ def test_jq(backtesting_allow_trade_direction: BacktestingAllowTradeDirection = 
             print(f"symbol: {symbol}, Exception: {traceback.format_exc()}")
             exit(0)
         product_timings.append((product, perf_counter() - product_start))
-        print(f"[TIMING] {product} 品种回测耗时: {perf_counter() - product_start:.1f}s")
 
     backtesting_overall_stat.analyze_summary_to_txt_file()
     backtesting_overall_stat.analyze_summary_to_excel_file()
