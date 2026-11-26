@@ -606,6 +606,7 @@ class TrixVptResearch(PandasBacktestingBaseV2):
                         )
                         self.after_holding_high = cur_high
                         self.after_holding_low = cur_low
+                        self.open_memory[cur_trading_date] = True
 
     def create_kline_fig(self) -> go.Figure:
         fig = make_subplots(
